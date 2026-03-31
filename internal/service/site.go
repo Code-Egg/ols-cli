@@ -2,6 +2,8 @@ package service
 
 import (
 	"archive/tar"
+	"archive/zip"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"fmt"
@@ -20,7 +22,10 @@ import (
 	"github.com/ols/ols-cli/internal/ui"
 )
 
-var domainPattern = regexp.MustCompile(`(?i)^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$`)
+var (
+	domainPattern    = regexp.MustCompile(`(?i)^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$`)
+	lsphpNamePattern = regexp.MustCompile(`lsphp[0-9]{2}`)
+)
 
 const (
 	defaultLSWSRoot = "/usr/local/lsws"
@@ -66,9 +71,10 @@ type CreateSiteOptions struct {
 }
 
 type UpdateSiteOptions struct {
-	Domain     string
-	PHPVersion string
-	DryRun     bool
+	Domain        string
+	WithWordPress bool
+	PHPVersion    string
+	DryRun        bool
 }
 
 func (s SiteService) InstallRuntime(ctx context.Context, opts InstallOptions) error {
@@ -133,6 +139,7 @@ func (s SiteService) CreateSite(ctx context.Context, opts CreateSiteOptions) err
 	vhostDir := filepath.Join(s.lswsRoot, "conf", "vhosts", opts.Domain)
 	vhostConfig := filepath.Join(vhostDir, "vhconf.conf")
 	vhostDefinition := filepath.Join(vhostDir, "vhost.conf")
+	serverConfigPath := filepath.Join(s.lswsRoot, "conf", "httpd_config.conf")
 
 	s.console.Section("Create site")
 	s.console.Bullet("Domain: " + opts.Domain)
@@ -140,6 +147,7 @@ func (s SiteService) CreateSite(ctx context.Context, opts CreateSiteOptions) err
 	s.console.Bullet("Platform: " + info.Summary())
 	s.console.Bullet("Document root: " + docRoot)
 	s.console.Bullet("VHost config: " + vhostConfig)
+	s.console.Bullet("Server config: " + serverConfigPath)
 	if opts.WithWordPress {
 		s.console.Bullet("WordPress: enabled")
 	}
@@ -150,20 +158,31 @@ func (s SiteService) CreateSite(ctx context.Context, opts CreateSiteOptions) err
 	if opts.DryRun {
 		s.console.Warn("Dry-run enabled: no system changes were made")
 		s.console.Info("Planned filesystem operations:")
+		s.console.Bullet("check duplicate domain in " + serverConfigPath)
 		s.console.Bullet("mkdir -p " + docRoot)
 		s.console.Bullet("mkdir -p " + vhostDir)
 		s.console.Bullet("write " + vhostConfig)
 		s.console.Bullet("write " + vhostDefinition)
+		s.console.Bullet("append virtualhost block into " + serverConfigPath)
+		s.console.Bullet("insert listener map in " + serverConfigPath)
 		if opts.WithWordPress {
 			s.console.Bullet("download and extract WordPress into " + docRoot)
+			s.console.Bullet("download and install LiteSpeed Cache plugin")
 		} else {
 			s.console.Bullet("write starter index.php into " + docRoot)
+		}
+		if opts.WithLE {
+			s.console.Bullet("perform domain reachability precheck for Let's Encrypt")
 		}
 		s.console.Success("Dry-run plan generated")
 		return nil
 	}
 
 	if err := s.ensureRuntimeInstalled(phpVersion); err != nil {
+		return err
+	}
+
+	if err := s.ensureDomainDoesNotExist(opts.Domain, vhostDir, serverConfigPath); err != nil {
 		return err
 	}
 
@@ -183,17 +202,26 @@ func (s SiteService) CreateSite(ctx context.Context, opts CreateSiteOptions) err
 	}
 
 	if opts.WithWordPress {
-		if err := installWordPress(docRoot); err != nil {
+		if err := ensureWordPressWithLSCache(docRoot); err != nil {
 			return err
 		}
-		s.console.Success("WordPress files provisioned")
+		s.console.Success("WordPress + LiteSpeed Cache provisioned")
 	} else {
 		if err := ensureStarterIndex(docRoot, opts.Domain); err != nil {
 			return err
 		}
 	}
 
+	if err := s.registerDomainInServerConfig(opts.Domain, siteRoot, vhostConfig, serverConfigPath); err != nil {
+		return err
+	}
+
 	if opts.WithLE {
+		if ok, detail := precheckLEDomainReachability(opts.Domain); ok {
+			s.console.Success("Let's Encrypt precheck passed: domain is reachable over HTTP")
+		} else {
+			s.console.Warn("Let's Encrypt precheck failed: " + detail)
+		}
 		s.console.Warn("SSL issuance is not yet automated; run certbot and wire SSL listener manually")
 	}
 
@@ -201,7 +229,8 @@ func (s SiteService) CreateSite(ctx context.Context, opts CreateSiteOptions) err
 	s.console.Bullet("Virtual host definition: " + vhostDefinition)
 	s.console.Bullet("Virtual host config: " + vhostConfig)
 	s.console.Bullet("Document root: " + docRoot)
-	s.console.Warn("Map this vhost in OpenLiteSpeed listener (WebAdmin) and reload OLS")
+	s.console.Bullet("Server config updated: " + serverConfigPath)
+	s.console.Warn("Review listener mapping in OpenLiteSpeed WebAdmin and reload OLS")
 	return nil
 }
 
@@ -220,20 +249,41 @@ func (s SiteService) UpdateSitePHP(ctx context.Context, opts UpdateSiteOptions) 
 		return err
 	}
 
+	packages := packagesForPHPUpdate(phpVersion)
+	vhostConfig := filepath.Join(s.lswsRoot, "conf", "vhosts", opts.Domain, "vhconf.conf")
+	docRoot := filepath.Join(s.webRoot, opts.Domain, "html")
+
 	s.console.Section("Update site PHP")
 	s.console.Bullet("Domain: " + opts.Domain)
 	s.console.Bullet("Target: lsphp" + phpVersion)
 	s.console.Bullet("Platform: " + info.Summary())
+	s.console.Bullet("VHost config: " + vhostConfig)
+	if opts.WithWordPress {
+		s.console.Bullet("WordPress + LiteSpeed Cache reconcile: enabled")
+	}
 
-	packages := packagesForPHPUpdate(phpVersion)
 	if opts.DryRun {
 		s.console.Warn("Dry-run enabled: no system changes were made")
 		s.console.Info("Planned package install:")
 		for _, pkg := range packages {
 			s.console.Bullet(pkg)
 		}
+		s.console.Info("Planned config operations:")
+		s.console.Bullet("rewrite PHP handler in " + vhostConfig)
+		if opts.WithWordPress {
+			s.console.Bullet("ensure WordPress files exist in " + docRoot)
+			s.console.Bullet("ensure LiteSpeed Cache plugin exists in " + filepath.Join(docRoot, "wp-content", "plugins", "litespeed-cache"))
+		}
 		s.console.Success("Dry-run plan generated")
 		return nil
+	}
+
+	if !fileExists(vhostConfig) {
+		return apperr.New(apperr.CodeValidation, fmt.Sprintf("virtual host does not exist for %s; expected %s", opts.Domain, vhostConfig))
+	}
+
+	if err := s.ensureRuntimeInstalled(phpVersion); err != nil {
+		return err
 	}
 
 	installer := platform.NewPackageInstaller(s.runner, info)
@@ -241,8 +291,20 @@ func (s SiteService) UpdateSitePHP(ctx context.Context, opts UpdateSiteOptions) 
 		return err
 	}
 
+	if err := switchVHostPHPHandler(vhostConfig, phpVersion); err != nil {
+		return err
+	}
+
+	if opts.WithWordPress {
+		if err := ensureWordPressWithLSCache(docRoot); err != nil {
+			return err
+		}
+		s.console.Success("WordPress + LiteSpeed Cache reconciled")
+	}
+
 	s.console.Success("Requested PHP package installed")
-	s.console.Warn("OpenLiteSpeed vhost PHP handler switch is scaffolded next step")
+	s.console.Success("VHost PHP handler updated")
+	s.console.Bullet("Reload OpenLiteSpeed to apply handler changes")
 	return nil
 }
 
@@ -259,6 +321,182 @@ func (s SiteService) configureLiteSpeedRepo(ctx context.Context, info platform.I
 	default:
 		return apperr.New(apperr.CodePlatform, fmt.Sprintf("unsupported package manager: %s", info.PackageManager))
 	}
+}
+
+func (s SiteService) ensureDomainDoesNotExist(domain, vhostDir, serverConfigPath string) error {
+	if fileExists(filepath.Join(vhostDir, "vhconf.conf")) || fileExists(filepath.Join(vhostDir, "vhost.conf")) {
+		return apperr.New(apperr.CodeValidation, fmt.Sprintf("domain %s already exists in %s", domain, vhostDir))
+	}
+
+	b, err := os.ReadFile(serverConfigPath)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeConfig, "failed to read OpenLiteSpeed server config", err)
+	}
+	cfg := string(b)
+
+	if strings.Contains(strings.ToLower(cfg), strings.ToLower("virtualhost "+domain+" {")) {
+		return apperr.New(apperr.CodeValidation, fmt.Sprintf("domain %s already exists in %s", domain, serverConfigPath))
+	}
+
+	if hasDomainMapLine(cfg, domain) {
+		return apperr.New(apperr.CodeValidation, fmt.Sprintf("domain %s is already mapped in %s", domain, serverConfigPath))
+	}
+
+	return nil
+}
+
+func (s SiteService) registerDomainInServerConfig(domain, siteRoot, vhostConfigPath, serverConfigPath string) error {
+	b, err := os.ReadFile(serverConfigPath)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeConfig, "failed to read OpenLiteSpeed server config", err)
+	}
+	cfg := string(b)
+
+	if strings.Contains(strings.ToLower(cfg), strings.ToLower("virtualhost "+domain+" {")) {
+		return apperr.New(apperr.CodeValidation, fmt.Sprintf("domain %s already exists in %s", domain, serverConfigPath))
+	}
+
+	updated := strings.TrimRight(cfg, "\n") + "\n\n" + buildVHostDefinition(domain, siteRoot, vhostConfigPath) + "\n"
+	updated, mapped, err := ensureDomainMappedInFirstListener(updated, domain)
+	if err != nil {
+		return err
+	}
+
+	if err := os.WriteFile(serverConfigPath, []byte(updated), 0o644); err != nil {
+		return apperr.Wrap(apperr.CodeConfig, "failed to update OpenLiteSpeed server config", err)
+	}
+
+	s.console.Bullet("Registered virtual host in " + serverConfigPath)
+	if mapped {
+		s.console.Bullet("Mapped domain in first listener: " + domain)
+	}
+	return nil
+}
+
+func ensureDomainMappedInFirstListener(cfg, domain string) (string, bool, error) {
+	lines := strings.Split(cfg, "\n")
+	start, end := findFirstListenerBlock(lines)
+	if start < 0 || end < 0 {
+		return "", false, apperr.New(apperr.CodeConfig, "no listener block found in OpenLiteSpeed server config; cannot auto-map domain")
+	}
+
+	for i := start; i <= end; i++ {
+		if mapLineContainsDomain(strings.TrimSpace(lines[i]), domain) {
+			return cfg, false, nil
+		}
+	}
+
+	indent := detectMapIndent(lines[start : end+1])
+	mapLine := fmt.Sprintf("%smap                     %s %s", indent, domain, domain)
+	lines = append(lines[:end], append([]string{mapLine}, lines[end:]...)...)
+	return strings.Join(lines, "\n"), true, nil
+}
+
+func findFirstListenerBlock(lines []string) (int, int) {
+	start := -1
+	depth := 0
+
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if start == -1 {
+			if strings.HasPrefix(trimmed, "listener ") && strings.Contains(trimmed, "{") {
+				start = i
+				depth = strings.Count(line, "{") - strings.Count(line, "}")
+				if depth <= 0 {
+					depth = 1
+				}
+			}
+			continue
+		}
+
+		depth += strings.Count(line, "{")
+		depth -= strings.Count(line, "}")
+		if depth == 0 {
+			return start, i
+		}
+	}
+
+	return -1, -1
+}
+
+func detectMapIndent(listenerLines []string) string {
+	for _, line := range listenerLines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "map ") {
+			idx := strings.Index(line, "map")
+			if idx > 0 {
+				return line[:idx]
+			}
+		}
+	}
+	return "  "
+}
+
+func hasDomainMapLine(cfg, domain string) bool {
+	for _, line := range strings.Split(cfg, "\n") {
+		if mapLineContainsDomain(strings.TrimSpace(line), domain) {
+			return true
+		}
+	}
+	return false
+}
+
+func mapLineContainsDomain(line, domain string) bool {
+	if !strings.HasPrefix(line, "map ") {
+		return false
+	}
+	fields := strings.Fields(line)
+	if len(fields) < 3 {
+		return false
+	}
+	for _, token := range fields[2:] {
+		for _, host := range strings.Split(token, ",") {
+			if strings.EqualFold(strings.TrimSpace(host), domain) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func switchVHostPHPHandler(vhostConfigPath, phpVersion string) error {
+	b, err := os.ReadFile(vhostConfigPath)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeConfig, "failed to read vhost config", err)
+	}
+
+	content := string(b)
+	newToken := "lsphp" + phpVersion
+	if lsphpNamePattern.MatchString(content) {
+		content = lsphpNamePattern.ReplaceAllString(content, newToken)
+	} else {
+		content = buildVHConfig(phpVersion)
+	}
+
+	if err := os.WriteFile(vhostConfigPath, []byte(content), 0o644); err != nil {
+		return apperr.Wrap(apperr.CodeConfig, "failed to write vhost config", err)
+	}
+	return nil
+}
+
+func precheckLEDomainReachability(domain string) (bool, string) {
+	client := &http.Client{Timeout: 8 * time.Second}
+	resp, err := client.Get("http://" + domain + "/")
+	if err != nil {
+		return false, err.Error()
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 500 {
+		return false, fmt.Sprintf("http %d returned from domain", resp.StatusCode)
+	}
+
+	server := strings.ToLower(strings.TrimSpace(resp.Header.Get("Server")))
+	if server != "" && !strings.Contains(server, "litespeed") && !strings.Contains(server, "cloudflare") {
+		return false, fmt.Sprintf("server header %q does not look like LiteSpeed/cloudflare", server)
+	}
+
+	return true, fmt.Sprintf("http %d", resp.StatusCode)
 }
 
 func (s SiteService) ensureRuntimeInstalled(phpVersion string) error {
@@ -378,6 +616,116 @@ func installWordPress(docRoot string) error {
 			}
 		default:
 			// Skip non-regular entries for safety.
+		}
+	}
+
+	return nil
+}
+
+func ensureWordPressWithLSCache(docRoot string) error {
+	if !looksLikeWordPressDocRoot(docRoot) {
+		if err := installWordPress(docRoot); err != nil {
+			return err
+		}
+	}
+	if err := installLiteSpeedCachePlugin(docRoot); err != nil {
+		return err
+	}
+	return nil
+}
+
+func looksLikeWordPressDocRoot(docRoot string) bool {
+	return fileExists(filepath.Join(docRoot, "wp-includes", "version.php")) && fileExists(filepath.Join(docRoot, "wp-admin", "admin.php"))
+}
+
+func installLiteSpeedCachePlugin(docRoot string) error {
+	const pluginURL = "https://downloads.wordpress.org/plugin/litespeed-cache.latest-stable.zip"
+
+	pluginsRoot := filepath.Join(docRoot, "wp-content", "plugins")
+	if err := os.MkdirAll(pluginsRoot, 0o755); err != nil {
+		return apperr.Wrap(apperr.CodeConfig, "failed to prepare plugin directory", err)
+	}
+
+	client := &http.Client{Timeout: 2 * time.Minute}
+	resp, err := client.Get(pluginURL)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeCommand, "failed to download LiteSpeed Cache plugin", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return apperr.New(apperr.CodeCommand, fmt.Sprintf("failed to download LiteSpeed Cache plugin: http %d", resp.StatusCode))
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeCommand, "failed to read LiteSpeed Cache plugin archive", err)
+	}
+
+	zr, err := zip.NewReader(bytes.NewReader(body), int64(len(body)))
+	if err != nil {
+		return apperr.Wrap(apperr.CodeCommand, "failed to open LiteSpeed Cache plugin archive", err)
+	}
+
+	root := filepath.Clean(pluginsRoot)
+	for _, zf := range zr.File {
+		cleanName := path.Clean(zf.Name)
+		if cleanName == "." || cleanName == "litespeed-cache" {
+			continue
+		}
+		if !strings.HasPrefix(cleanName, "litespeed-cache/") {
+			continue
+		}
+
+		rel := strings.TrimPrefix(cleanName, "litespeed-cache/")
+		if rel == "" {
+			continue
+		}
+
+		target := filepath.Join(root, filepath.FromSlash(rel))
+		cleanTarget := filepath.Clean(target)
+		if cleanTarget != root && !strings.HasPrefix(cleanTarget, root+string(os.PathSeparator)) {
+			return apperr.New(apperr.CodeConfig, "unsafe LiteSpeed Cache archive path detected")
+		}
+
+		if zf.FileInfo().IsDir() {
+			if err := os.MkdirAll(cleanTarget, 0o755); err != nil {
+				return apperr.Wrap(apperr.CodeConfig, "failed to create plugin directory", err)
+			}
+			continue
+		}
+
+		if err := os.MkdirAll(filepath.Dir(cleanTarget), 0o755); err != nil {
+			return apperr.Wrap(apperr.CodeConfig, "failed to create plugin file directory", err)
+		}
+
+		src, err := zf.Open()
+		if err != nil {
+			return apperr.Wrap(apperr.CodeConfig, "failed to open plugin file from archive", err)
+		}
+
+		mode := zf.Mode()
+		if mode == 0 {
+			mode = 0o644
+		}
+		dst, err := os.OpenFile(cleanTarget, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
+		if err != nil {
+			_ = src.Close()
+			return apperr.Wrap(apperr.CodeConfig, "failed to create plugin file", err)
+		}
+
+		if _, err := io.Copy(dst, src); err != nil {
+			_ = dst.Close()
+			_ = src.Close()
+			return apperr.Wrap(apperr.CodeConfig, "failed to write plugin file", err)
+		}
+
+		if err := dst.Close(); err != nil {
+			_ = src.Close()
+			return apperr.Wrap(apperr.CodeConfig, "failed to finalize plugin file", err)
+		}
+		if err := src.Close(); err != nil {
+			return apperr.Wrap(apperr.CodeConfig, "failed to close plugin archive stream", err)
 		}
 	}
 

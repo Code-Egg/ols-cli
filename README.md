@@ -12,7 +12,7 @@ It is currently focused on clear command behavior, predictable output, and safe 
 - Commands available:
   - `ols install [--php74|--php80|--php81|--php82|--php83|--php84]`
   - `ols site create <domain> --wp [--le] [--php74|--php80|--php81|--php82|--php83|--php84]`
-  - `ols site update <domain> --php74|--php80|--php81|--php82|--php83|--php84`
+  - `ols site update <domain> [--wp] --php74|--php80|--php81|--php82|--php83|--php84`
 - Structured errors with stable machine-readable codes
 - Styled terminal output for clearer operations
 - Unit tests and CI scaffold
@@ -78,23 +78,32 @@ This command now creates:
 - `vhconf.conf` and `vhost.conf`
 - Document root under `/var/www/<domain>/html`
 - WordPress files when `--wp` is enabled
+- LiteSpeed Cache plugin in `wp-content/plugins/litespeed-cache` when `--wp` is enabled
+- Domain registration into `/usr/local/lsws/conf/httpd_config.conf` (virtualhost + first listener map)
 
 ### Create a site with defaults (WordPress + PHP 8.2)
 
 ```bash
-ols site create example.com --wp
+sudo ols site create example.com --wp
 ```
 
 ### Update a site to a target PHP version
 
 ```bash
-ols site update example.com --php82
+sudo ols site update example.com --php82
+```
+
+### Update a site and ensure WordPress + LiteSpeed Cache exist
+
+```bash
+sudo ols site update example.com --wp --php83
 ```
 
 ### Preview operations without making changes
 
 ```bash
 ols --dry-run site create example.com --wp --le --php82
+ols --dry-run site update example.com --wp --php83
 ```
 
 ## Development
@@ -190,11 +199,17 @@ Workflow: `.github/workflows/ci.yml`
 
 ## Project status
 
-This repository is a strong scaffold with tested core abstractions and command routing.
+This repository now provides a practical baseline for:
 
-The following are planned next phases:
+- Runtime installation (`ols install`)
+- Site creation with virtual host file generation
+- Main OLS server config registration (virtualhost + listener map)
+- WordPress provisioning with LiteSpeed Cache plugin
+- Site-level PHP handler switching via `ols site update`
 
-- OpenLiteSpeed virtual host file generation and activation
-- WordPress provisioning (download, config, database bootstrap)
-- Let's Encrypt issuance and SSL virtual host wiring
+Planned next phases:
+
+- Full listener selection/multi-listener mapping strategy
+- Automated Let's Encrypt issuance and SSL listener wiring
+- Optional OLS reload/restart automation toggles
 - Full Debian repository publishing pipeline

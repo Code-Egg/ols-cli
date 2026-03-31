@@ -89,7 +89,10 @@ func newSiteCreateCmd(svc siteManager, rootOpts *rootOptions) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "create <domain>",
 		Short: "Create a new OpenLiteSpeed virtual host",
-		Args:  cobra.ExactArgs(1),
+		Example: "ols site create example.com --wp\n" +
+			"ols site create example.com --wp --php84\n" +
+			"ols --dry-run site create example.com --wp --le --php82",
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			phpVersion, err := php.selected("82")
 			if err != nil {
@@ -117,11 +120,15 @@ func newSiteCreateCmd(svc siteManager, rootOpts *rootOptions) *cobra.Command {
 
 func newSiteUpdateCmd(svc siteManager, rootOpts *rootOptions) *cobra.Command {
 	php := &phpFlags{}
+	var withWordPress bool
 
 	cmd := &cobra.Command{
 		Use:   "update <domain>",
 		Short: "Update existing site configuration",
-		Args:  cobra.ExactArgs(1),
+		Example: "ols site update example.com --php83\n" +
+			"ols site update example.com --wp --php84\n" +
+			"ols --dry-run site update example.com --wp --php82",
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			phpVersion, err := php.selected("")
 			if err != nil {
@@ -131,9 +138,10 @@ func newSiteUpdateCmd(svc siteManager, rootOpts *rootOptions) *cobra.Command {
 				return apperr.New(apperr.CodeValidation, "missing PHP version flag; provide one of --php74/--php80/--php81/--php82/--php83/--php84")
 			}
 			err = svc.UpdateSitePHP(cmd.Context(), service.UpdateSiteOptions{
-				Domain:     args[0],
-				PHPVersion: phpVersion,
-				DryRun:     rootOpts.DryRun,
+				Domain:        args[0],
+				WithWordPress: withWordPress,
+				PHPVersion:    phpVersion,
+				DryRun:        rootOpts.DryRun,
 			})
 			if err != nil {
 				return fmt.Errorf("site update failed: %w", err)
@@ -142,6 +150,7 @@ func newSiteUpdateCmd(svc siteManager, rootOpts *rootOptions) *cobra.Command {
 		},
 	}
 
+	cmd.Flags().BoolVar(&withWordPress, "wp", false, "ensure WordPress and LiteSpeed Cache plugin are present")
 	addPHPVersionFlags(cmd, php)
 	return cmd
 }
