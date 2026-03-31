@@ -48,6 +48,16 @@ Directory: `packaging/apt`
 
 Contains Debian packaging metadata (`debian/control`, `debian/rules`, etc.) for future `apt install ols` publishing.
 
+## One-time server bootstrap (recommended)
+
+Before first site provisioning, add the LiteSpeed package repository once:
+
+```bash
+wget -O - https://repo.litespeed.sh | sudo bash
+```
+
+Then install `ols` and run site commands.
+
 ## Usage
 
 ### Create a site with WordPress + Let's Encrypt
@@ -55,6 +65,8 @@ Contains Debian packaging metadata (`debian/control`, `debian/rules`, etc.) for 
 ```bash
 ols site create example.com --wp --le --php82
 ```
+
+Current implementation note: this command currently installs required packages and validates workflow wiring. It does **not** yet create the OpenLiteSpeed virtual host, document root, or WordPress files.
 
 ### Create a site with defaults (WordPress + PHP 8.2)
 
