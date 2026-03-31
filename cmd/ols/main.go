@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/eric7/ols-cli/internal/cli"
+	"github.com/ols/ols-cli/internal/cli"
 )
 
 func main() {

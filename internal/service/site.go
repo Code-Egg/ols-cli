@@ -6,10 +6,10 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/eric7/ols-cli/internal/apperr"
-	"github.com/eric7/ols-cli/internal/platform"
-	"github.com/eric7/ols-cli/internal/runner"
-	"github.com/eric7/ols-cli/internal/ui"
+	"github.com/ols/ols-cli/internal/apperr"
+	"github.com/ols/ols-cli/internal/platform"
+	"github.com/ols/ols-cli/internal/runner"
+	"github.com/ols/ols-cli/internal/ui"
 )
 
 var domainPattern = regexp.MustCompile(`(?i)^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$`)

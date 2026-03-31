@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/eric7/ols-cli/internal/apperr"
-	"github.com/eric7/ols-cli/internal/runner"
+	"github.com/ols/ols-cli/internal/apperr"
+	"github.com/ols/ols-cli/internal/runner"
 )
 
 type PackageInstaller struct {

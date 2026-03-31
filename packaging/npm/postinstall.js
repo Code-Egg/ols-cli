@@ -4,7 +4,7 @@ const { chmodSync, renameSync } = require('node:fs');
 const { get } = require('node:https');
 const { join } = require('node:path');
 
-const REPO = 'eric7/ols-cli';
+const REPO = 'ols/ols-cli';
 const VERSION = process.env.npm_package_version || '0.1.0-dev';
 
 function getArch() {

@@ -7,7 +7,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/eric7/ols-cli/internal/apperr"
+	"github.com/ols/ols-cli/internal/apperr"
 )
 
 // Result captures executed command outputs.

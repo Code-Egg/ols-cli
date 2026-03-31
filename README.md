@@ -1,26 +1,28 @@
 # ols-cli
 
-Security-focused OpenLiteSpeed lifecycle CLI for WordPress sites.
+A practical CLI for managing the OpenLiteSpeed + WordPress lifecycle on Linux servers.
+
+It is currently focused on clear command behavior, predictable output, and safe automation patterns.
 
 ## Current scope
 
-- Cross-distro Linux targeting:
+- Linux distro targeting:
   - Ubuntu / Debian
   - CentOS-family (CentOS, Rocky, AlmaLinux)
-- Commands scaffolded:
-  - `ols site create <domain> --wp [--le] [--php82]`
-  - `ols site update <domain> --php82`
-- Strong structured error model with machine-readable error codes.
-- Styled console output for operational clarity.
-- Automated tests and CI workflow scaffold.
+- Commands available:
+  - `ols site create <domain> --wp [--le] [--php74|--php80|--php81|--php82|--php83|--php84]`
+  - `ols site update <domain> --php74|--php80|--php81|--php82|--php83|--php84`
+- Structured errors with stable machine-readable codes
+- Styled terminal output for clearer operations
+- Unit tests and CI scaffold
 
 ## Why Go
 
-- Compiled, static binary for predictable production deployment.
-- Strong typing and standard test tooling (`go test ./...`).
-- Better safety profile for privileged automation than ad-hoc shell-only logic.
+- Single compiled binary for deployment consistency
+- Strong type safety for privileged automation code
+- Built-in test tooling with straightforward CI integration
 
-Users do **not** need to compile locally when binaries are published in releases.
+If release binaries are published, end users do not need to compile from source.
 
 ## Installation channels
 
@@ -30,22 +32,21 @@ Users do **not** need to compile locally when binaries are published in releases
 bash ols
 ```
 
-`ols` is a thin bootstrap entry script that calls [`scripts/install.sh`](scripts/install.sh).
-It downloads release artifacts, verifies SHA-256 checksums, and installs `ols` to `/usr/local/bin/ols`.
+The `ols` script calls `scripts/install.sh`, downloads release artifacts, verifies SHA-256 checksums, and installs `ols` to `/usr/local/bin/ols`.
 
 ### 2) npm package scaffold
 
 Directory: `packaging/npm`
 
 - Package name: `@ols/cli`
-- `postinstall.js` downloads and verifies Linux binary from GitHub Releases.
-- `bin/ols` launches installed binary.
+- `postinstall.js` downloads and verifies Linux binary from GitHub Releases
+- `bin/ols` launches the installed binary
 
 ### 3) apt packaging scaffold
 
 Directory: `packaging/apt`
 
-Contains initial Debian packaging metadata scaffold (`debian/control`, `debian/rules`, etc.) for publishing `apt install ols`.
+Contains Debian packaging metadata (`debian/control`, `debian/rules`, etc.) for future `apt install ols` publishing.
 
 ## Usage
 
@@ -55,19 +56,19 @@ Contains initial Debian packaging metadata scaffold (`debian/control`, `debian/r
 ols site create example.com --wp --le --php82
 ```
 
-### Create a site with defaults (PHP 8.2)
+### Create a site with defaults (WordPress + PHP 8.2)
 
 ```bash
 ols site create example.com --wp
 ```
 
-### Update a site to PHP 8.2
+### Update a site to a target PHP version
 
 ```bash
 ols site update example.com --php82
 ```
 
-### Preview operations without changing server
+### Preview operations without making changes
 
 ```bash
 ols --dry-run site create example.com --wp --le --php82
@@ -75,35 +76,102 @@ ols --dry-run site create example.com --wp --le --php82
 
 ## Development
 
-### Build
+### Build locally
 
 ```bash
 go build -o ols ./cmd/ols
 ```
 
-### Test
+### Run tests
 
 ```bash
 go test ./...
 ```
 
-### CI
+For verbose output:
 
-GitHub Actions workflow: `.github/workflows/ci.yml`
+```bash
+go test -v ./...
+```
+
+## Testing on an Ubuntu server
+
+Use these steps on your Ubuntu host (22.04/24.04 recommended):
+
+1. Install Go and Git
+
+```bash
+sudo apt update
+sudo apt install -y golang-go git build-essential
+```
+
+2. Clone and enter the project
+
+```bash
+git clone https://github.com/<your-org>/ols-cli.git
+cd ols-cli
+```
+
+3. Sync modules and generate checksums
+
+```bash
+go mod tidy
+```
+
+This creates/updates `go.sum`, which is required for reproducible builds and CI.
+
+4. Run tests
+
+```bash
+go test ./...
+```
+
+5. Build the CLI
+
+```bash
+go build -o ols ./cmd/ols
+```
+
+6. Smoke-test command parsing (safe)
+
+```bash
+./ols --help
+./ols --dry-run site create example.com --wp --le --php82
+```
+
+## Common build issue: missing go.sum entries
+
+If you see errors like “missing go.sum entry for module providing package ...”, run:
+
+```bash
+go mod tidy
+```
+
+Then commit both files:
+
+- `go.mod`
+- `go.sum`
+
+This keeps CI and local builds in sync.
+
+## CI
+
+Workflow: `.github/workflows/ci.yml`
 
 ## Security notes
 
-- Input validation for domain and PHP version flags.
-- Explicit command execution abstraction (`internal/runner`) for safer process control.
-- Fail-fast errors with structured codes under `internal/apperr`.
-- Checksum verification in installer/downloader scaffolds.
+- Input validation for domain and PHP version flags
+- Explicit command execution abstraction in `internal/runner`
+- Fail-fast structured errors in `internal/apperr`
+- Checksum verification in installer/downloader scaffolds
 
-## Important status
+## Project status
 
-This is a strong scaffold with tested core abstractions and command routing.
-The following are intentionally marked as next implementation phases:
+This repository is a strong scaffold with tested core abstractions and command routing.
 
-- OpenLiteSpeed vhost file generation and activation.
-- WordPress provisioning (download/config/db bootstrap).
-- Let's Encrypt issuance and SSL vhost wiring.
-- Full Debian repository publishing pipeline.
+The following are planned next phases:
+
+- OpenLiteSpeed virtual host file generation and activation
+- WordPress provisioning (download, config, database bootstrap)
+- Let's Encrypt issuance and SSL virtual host wiring
+- Full Debian repository publishing pipeline

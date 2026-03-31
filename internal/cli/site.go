@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/eric7/ols-cli/internal/apperr"
-	"github.com/eric7/ols-cli/internal/service"
+	"github.com/ols/ols-cli/internal/apperr"
+	"github.com/ols/ols-cli/internal/service"
 	"github.com/spf13/cobra"
 )
 

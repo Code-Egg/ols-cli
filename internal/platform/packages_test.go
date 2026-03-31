@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/eric7/ols-cli/internal/runner"
+	"github.com/ols/ols-cli/internal/runner"
 )
 
 type fakeRunner struct {

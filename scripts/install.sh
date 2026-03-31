@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO="eric7/ols-cli"
+REPO="ols/ols-cli"
 BIN_NAME="ols"
 INSTALL_DIR="/usr/local/bin"
 

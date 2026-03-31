@@ -5,9 +5,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/eric7/ols-cli/internal/platform"
-	"github.com/eric7/ols-cli/internal/runner"
-	"github.com/eric7/ols-cli/internal/ui"
+	"github.com/ols/ols-cli/internal/platform"
+	"github.com/ols/ols-cli/internal/runner"
+	"github.com/ols/ols-cli/internal/ui"
 )
 
 type fakeDetector struct {

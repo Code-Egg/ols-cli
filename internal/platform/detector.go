@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/eric7/ols-cli/internal/apperr"
+	"github.com/ols/ols-cli/internal/apperr"
 )
 
 type Family string
