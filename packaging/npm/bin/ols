@@ -1,0 +1,20 @@
+#!/usr/bin/env node
+const { spawnSync } = require('node:child_process');
+const { existsSync } = require('node:fs');
+const { join } = require('node:path');
+
+const localBinary = join(__dirname, '..', '.bin', process.platform === 'linux' ? 'ols-linux' : 'ols');
+const fallbackBinary = '/usr/local/bin/ols';
+
+const binary = existsSync(localBinary) ? localBinary : fallbackBinary;
+
+const result = spawnSync(binary, process.argv.slice(2), {
+  stdio: 'inherit',
+});
+
+if (result.error) {
+  console.error(`[ols] failed to execute binary at ${binary}: ${result.error.message}`);
+  process.exit(1);
+}
+
+process.exit(result.status ?? 0);

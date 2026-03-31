@@ -1,0 +1,15 @@
+{
+  "name": "@ols/cli",
+  "version": "0.1.0-dev",
+  "description": "OpenLiteSpeed lifecycle CLI bootstrap installer",
+  "license": "MIT",
+  "bin": {
+    "ols": "bin/ols"
+  },
+  "scripts": {
+    "postinstall": "node ./postinstall.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
