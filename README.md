@@ -10,6 +10,7 @@ It is currently focused on clear command behavior, predictable output, and safe 
   - Ubuntu / Debian
   - CentOS-family (CentOS, Rocky, AlmaLinux)
 - Commands available:
+  - `ols install [--php74|--php80|--php81|--php82|--php83|--php84]`
   - `ols site create <domain> --wp [--le] [--php74|--php80|--php81|--php82|--php83|--php84]`
   - `ols site update <domain> --php74|--php80|--php81|--php82|--php83|--php84`
 - Structured errors with stable machine-readable codes
@@ -50,23 +51,33 @@ Contains Debian packaging metadata (`debian/control`, `debian/rules`, etc.) for 
 
 ## One-time server bootstrap (recommended)
 
-Before first site provisioning, add the LiteSpeed package repository once:
+Use `ols install` before first site provisioning. It configures LiteSpeed repository access and installs OpenLiteSpeed + selected PHP runtime.
 
 ```bash
-wget -O - https://repo.litespeed.sh | sudo bash
+sudo ols install --php82
 ```
 
-Then install `ols` and run site commands.
+Then create sites with `ols site create ...`.
 
 ## Usage
+
+### Install runtime once (required before provisioning)
+
+```bash
+sudo ols install --php82
+```
 
 ### Create a site with WordPress + Let's Encrypt
 
 ```bash
-ols site create example.com --wp --le --php82
+sudo ols site create example.com --wp --le --php82
 ```
 
-Current implementation note: this command currently installs required packages and validates workflow wiring. It does **not** yet create the OpenLiteSpeed virtual host, document root, or WordPress files.
+This command now creates:
+- Virtual host config directory under `/usr/local/lsws/conf/vhosts/<domain>/`
+- `vhconf.conf` and `vhost.conf`
+- Document root under `/var/www/<domain>/html`
+- WordPress files when `--wp` is enabled
 
 ### Create a site with defaults (WordPress + PHP 8.2)
 

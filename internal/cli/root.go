@@ -46,6 +46,7 @@ func NewRootCmd() *cobra.Command {
 		return apperr.Wrap(apperr.CodeValidation, "invalid command options", err)
 	})
 
+	cmd.AddCommand(newInstallCmd(svc, opts))
 	cmd.AddCommand(newSiteCmd(svc, opts))
 	return wrapErrors(cmd)
 }

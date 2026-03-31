@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -22,10 +23,8 @@ import (
 var domainPattern = regexp.MustCompile(`(?i)^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$`)
 
 const (
-	defaultLSWSRoot       = "/usr/local/lsws"
-	defaultWebRoot        = "/var/www"
-	liteSpeedRepoSetupCmd = "wget -O - https://repo.litespeed.sh | bash"
-	wordpressTarballURL   = "https://wordpress.org/latest.tar.gz"
+	defaultLSWSRoot = "/usr/local/lsws"
+	defaultWebRoot  = "/var/www"
 )
 
 // SiteService contains site lifecycle workflows.
@@ -54,10 +53,8 @@ func NewSiteServiceWithPaths(detector platform.Detector, run runner.Runner, cons
 }
 
 type InstallOptions struct {
-	PHPVersion    string
-	WithWordPress bool
-	WithLE        bool
-	DryRun        bool
+	PHPVersion string
+	DryRun     bool
 }
 
 type CreateSiteOptions struct {
@@ -85,21 +82,77 @@ func (s SiteService) InstallRuntime(ctx context.Context, opts InstallOptions) er
 		return err
 	}
 
-	s.console.Section("Install runtime")
-	s.console.Bullet("PHP: lsphp" + phpVersion)
-	s.console.Bullet("Platform: " + info.Summary())
-	if opts.WithWordPress {
-		s.console.Bullet("WordPress dependencies: enabled")
-	}
-	if opts.WithLE {
-		s.console.Bullet("Let's Encrypt dependencies: enabled")
-	}
+	pkgs := packagesForInstall(phpVersion)
 
-	packages := packagesForInstall(info, phpVersion, opts.WithWordPress, opts.WithLE)
+	s.console.Section("Install runtime")
+	s.console.Bullet("Platform: " + info.Summary())
+	s.console.Bullet("PHP: lsphp" + phpVersion)
+	for _, p := range pkgs {
+		s.console.Bullet("Package: " + p)
+	}
 
 	if opts.DryRun {
 		s.console.Warn("Dry-run enabled: no system changes were made")
-		s.console.Info("Planned repository setup:")
+		s.console.Bullet("configure LiteSpeed package repository")
+		s.console.Bullet("install runtime packages")
+		s.console.Success("Dry-run plan generated")
+		return nil
+	}
+
+	if err := s.configureLiteSpeedRepo(ctx, info); err != nil {
+		return err
+	}
+
+	installer := platform.NewPackageInstaller(s.runner, info)
+	if err := installer.Install(ctx, pkgs...); err != nil {
+		return err
+	}
+
+	s.console.Success("OpenLiteSpeed runtime installed")
+	s.console.Bullet("Binary: " + filepath.Join(s.lswsRoot, "bin", "lswsctrl"))
+	return nil
+}
+
+func (s SiteService) CreateSite(ctx context.Context, opts CreateSiteOptions) error {
+	if err := ValidateDomain(opts.Domain); err != nil {
+		return err
+	}
+
+	phpVersion, err := NormalizePHPVersion(opts.PHPVersion)
+	if err != nil {
+		return err
+	}
+
+	info, err := s.detector.Detect(ctx)
+	if err != nil {
+		return err
+	}
+
+	siteRoot := filepath.Join(s.webRoot, opts.Domain)
+	docRoot := filepath.Join(siteRoot, "html")
+	vhostDir := filepath.Join(s.lswsRoot, "conf", "vhosts", opts.Domain)
+	vhostConfig := filepath.Join(vhostDir, "vhconf.conf")
+	vhostDefinition := filepath.Join(vhostDir, "vhost.conf")
+
+	s.console.Section("Create site")
+	s.console.Bullet("Domain: " + opts.Domain)
+	s.console.Bullet("PHP: lsphp" + phpVersion)
+	s.console.Bullet("Platform: " + info.Summary())
+	s.console.Bullet("Document root: " + docRoot)
+	s.console.Bullet("VHost config: " + vhostConfig)
+	if opts.WithWordPress {
+		s.console.Bullet("WordPress: enabled")
+	}
+	if opts.WithLE {
+		s.console.Bullet("Let's Encrypt: enabled")
+	}
+
+	if opts.DryRun {
+		s.console.Warn("Dry-run enabled: no system changes were made")
+		s.console.Info("Planned filesystem operations:")
+		s.console.Bullet("mkdir -p " + docRoot)
+		s.console.Bullet("mkdir -p " + vhostDir)
+		s.console.Bullet("write " + vhostConfig)
 		s.console.Bullet("write " + vhostDefinition)
 		if opts.WithWordPress {
 			s.console.Bullet("download and extract WordPress into " + docRoot)
@@ -144,11 +197,11 @@ func (s SiteService) InstallRuntime(ctx context.Context, opts InstallOptions) er
 		s.console.Warn("SSL issuance is not yet automated; run certbot and wire SSL listener manually")
 	}
 
-	s.console.Success("Virtual host scaffold created")
+	s.console.Success("Virtual host files created")
 	s.console.Bullet("Virtual host definition: " + vhostDefinition)
 	s.console.Bullet("Virtual host config: " + vhostConfig)
 	s.console.Bullet("Document root: " + docRoot)
-	s.console.Warn("Map this vhost in OpenLiteSpeed listener (WebAdmin) if not already mapped")
+	s.console.Warn("Map this vhost in OpenLiteSpeed listener (WebAdmin) and reload OLS")
 	return nil
 }
 
@@ -193,6 +246,21 @@ func (s SiteService) UpdateSitePHP(ctx context.Context, opts UpdateSiteOptions) 
 	return nil
 }
 
+func (s SiteService) configureLiteSpeedRepo(ctx context.Context, info platform.Info) error {
+	switch info.PackageManager {
+	case platform.PackageManagerAPT, platform.PackageManagerYUM, platform.PackageManagerDNF:
+		setup := "if command -v wget >/dev/null 2>&1; then wget -qO - https://repo.litespeed.sh | bash; " +
+			"elif command -v curl >/dev/null 2>&1; then curl -fsSL https://repo.litespeed.sh | bash; " +
+			"else echo 'wget or curl is required to add LiteSpeed repo' >&2; exit 1; fi"
+		if _, err := s.runner.Run(ctx, "bash", "-c", setup); err != nil {
+			return apperr.Wrap(apperr.CodeCommand, "failed to configure LiteSpeed package repository", err)
+		}
+		return nil
+	default:
+		return apperr.New(apperr.CodePlatform, fmt.Sprintf("unsupported package manager: %s", info.PackageManager))
+	}
+}
+
 func (s SiteService) ensureRuntimeInstalled(phpVersion string) error {
 	lswsCtrlPath := filepath.Join(s.lswsRoot, "bin", "lswsctrl")
 	if !fileExists(lswsCtrlPath) {
@@ -213,11 +281,11 @@ func (s SiteService) ensureRuntimeInstalled(phpVersion string) error {
 	return nil
 }
 
-func fileExists(path string) bool {
-	if strings.TrimSpace(path) == "" {
+func fileExists(p string) bool {
+	if strings.TrimSpace(p) == "" {
 		return false
 	}
-	_, err := os.Stat(path)
+	_, err := os.Stat(p)
 	return err == nil
 }
 
@@ -230,6 +298,89 @@ func ensureStarterIndex(docRoot, domain string) error {
 	if err := os.WriteFile(indexPath, []byte(content), 0o644); err != nil {
 		return apperr.Wrap(apperr.CodeConfig, "failed to write starter index.php", err)
 	}
+	return nil
+}
+
+func installWordPress(docRoot string) error {
+	const wpArchiveURL = "https://wordpress.org/latest.tar.gz"
+
+	client := &http.Client{Timeout: 2 * time.Minute}
+	resp, err := client.Get(wpArchiveURL)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeCommand, "failed to download WordPress archive", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return apperr.New(apperr.CodeCommand, fmt.Sprintf("failed to download WordPress archive: http %d", resp.StatusCode))
+	}
+
+	gz, err := gzip.NewReader(resp.Body)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeCommand, "failed to open WordPress archive", err)
+	}
+	defer gz.Close()
+
+	tr := tar.NewReader(gz)
+	root := filepath.Clean(docRoot)
+
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return apperr.Wrap(apperr.CodeCommand, "failed to read WordPress archive entry", err)
+		}
+
+		cleanName := path.Clean(hdr.Name)
+		if cleanName == "." || cleanName == "wordpress" {
+			continue
+		}
+		if !strings.HasPrefix(cleanName, "wordpress/") {
+			continue
+		}
+
+		rel := strings.TrimPrefix(cleanName, "wordpress/")
+		if rel == "" {
+			continue
+		}
+
+		target := filepath.Join(root, filepath.FromSlash(rel))
+		cleanTarget := filepath.Clean(target)
+		if cleanTarget != root && !strings.HasPrefix(cleanTarget, root+string(os.PathSeparator)) {
+			return apperr.New(apperr.CodeConfig, "unsafe WordPress archive path detected")
+		}
+
+		switch hdr.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(cleanTarget, 0o755); err != nil {
+				return apperr.Wrap(apperr.CodeConfig, "failed to create WordPress directory", err)
+			}
+		case tar.TypeReg, tar.TypeRegA:
+			if err := os.MkdirAll(filepath.Dir(cleanTarget), 0o755); err != nil {
+				return apperr.Wrap(apperr.CodeConfig, "failed to create WordPress file directory", err)
+			}
+			mode := os.FileMode(hdr.Mode)
+			if mode == 0 {
+				mode = 0o644
+			}
+			f, err := os.OpenFile(cleanTarget, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
+			if err != nil {
+				return apperr.Wrap(apperr.CodeConfig, "failed to create WordPress file", err)
+			}
+			if _, err := io.Copy(f, tr); err != nil {
+				_ = f.Close()
+				return apperr.Wrap(apperr.CodeConfig, "failed to write WordPress file", err)
+			}
+			if err := f.Close(); err != nil {
+				return apperr.Wrap(apperr.CodeConfig, "failed to finalize WordPress file", err)
+			}
+		default:
+			// Skip non-regular entries for safety.
+		}
+	}
+
 	return nil
 }
 
