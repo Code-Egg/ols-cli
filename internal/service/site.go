@@ -237,6 +237,9 @@ func (s SiteService) CreateSite(ctx context.Context, opts CreateSiteOptions) err
 	if err := os.WriteFile(vhostDefinition, []byte(buildVHostDefinition(opts.Domain, siteRoot, vhostConfig)), 0o644); err != nil {
 		return apperr.Wrap(apperr.CodeConfig, "failed to write vhost definition", err)
 	}
+	if err := s.inheritOwnershipFromParent(vhostDir, vhostConfig, vhostDefinition); err != nil {
+		s.console.Warn("Could not align ownership for virtual host files: " + err.Error())
+	}
 
 	if opts.WithWordPress {
 		if err := ensureWordPressWithLSCache(docRoot); err != nil {
@@ -619,6 +622,49 @@ func ensureStarterIndex(docRoot, domain string) error {
 	content := fmt.Sprintf("<?php\nheader('Content-Type: text/plain; charset=utf-8');\necho \"Site %s is ready.\\n\";\n", domain)
 	if err := os.WriteFile(indexPath, []byte(content), 0o644); err != nil {
 		return apperr.Wrap(apperr.CodeConfig, "failed to write starter index.php", err)
+	}
+	return nil
+}
+
+func (s SiteService) inheritOwnershipFromParent(paths ...string) error {
+	for _, p := range paths {
+		if strings.TrimSpace(p) == "" {
+			continue
+		}
+		if err := inheritPathOwnershipFromParent(p); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func inheritPathOwnershipFromParent(path string) error {
+	cleanPath := filepath.Clean(path)
+	info, err := os.Stat(cleanPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return apperr.Wrap(apperr.CodeConfig, "failed to stat path for ownership alignment", err)
+	}
+
+	parentInfo, err := os.Stat(filepath.Dir(cleanPath))
+	if err != nil {
+		return apperr.Wrap(apperr.CodeConfig, "failed to stat parent path for ownership alignment", err)
+	}
+
+	targetUID, targetGID, ok := fileOwnership(parentInfo)
+	if !ok {
+		return nil
+	}
+
+	currentUID, currentGID, hasCurrentOwner := fileOwnership(info)
+	if hasCurrentOwner && currentUID == targetUID && currentGID == targetGID {
+		return nil
+	}
+
+	if err := chownPath(cleanPath, targetUID, targetGID); err != nil {
+		return apperr.Wrap(apperr.CodeConfig, "failed to align ownership with parent", err)
 	}
 	return nil
 }
