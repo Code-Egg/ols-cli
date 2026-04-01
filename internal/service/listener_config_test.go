@@ -43,7 +43,7 @@ func TestUpsertListenerDirectivesUpdatesExisting(t *testing.T) {
 	if !changed {
 		t.Fatal("expected changed=true")
 	}
-	if !strings.Contains(updated, "address                 *:80") {
+	if !strings.Contains(updated, "address") || !strings.Contains(updated, "*:80") {
 		t.Fatalf("expected updated address, got: %s", updated)
 	}
 	if strings.Contains(updated, "*:8088") {

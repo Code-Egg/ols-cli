@@ -32,9 +32,10 @@ var (
 )
 
 const (
-	defaultLSWSRoot = "/usr/local/lsws"
-	defaultWebRoot  = "/var/www"
-	wpCLIPharURL    = "https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar"
+	defaultLSWSRoot      = "/usr/local/lsws"
+	defaultWebRoot       = "/var/www"
+	defaultSecretsRoot   = "/etc/ols-cli/sites"
+	wpCLIPharURL         = "https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar"
 )
 
 // SiteService contains site lifecycle workflows.
@@ -276,6 +277,7 @@ func (s SiteService) CreateSite(ctx context.Context, opts CreateSiteOptions) err
 		s.console.Bullet("Admin URL: " + wpAccess.AdminURL)
 		s.console.Bullet("Admin User: " + wpAccess.AdminUser)
 		s.console.Bullet("Admin Password: " + wpAccess.AdminPassword)
+		s.console.Bullet("Secrets file: " + wpAccess.SecretsFile)
 	}
 	s.console.Warn("Review listener mapping in OpenLiteSpeed WebAdmin and reload OLS")
 	return nil
@@ -720,6 +722,7 @@ type wpAdminAccess struct {
 	AdminURL      string
 	AdminUser     string
 	AdminPassword string
+	SecretsFile   string
 }
 
 func (s SiteService) provisionWordPressInstall(ctx context.Context, domain, docRoot, phpVersion string) (*wpAdminAccess, error) {
@@ -788,10 +791,16 @@ func (s SiteService) provisionWordPressInstall(ctx context.Context, domain, docR
 		return nil, err
 	}
 
+	secretsPath, err := s.persistWordPressSecrets(domain, dbName, dbUser, dbPassword, adminUser, adminPassword)
+	if err != nil {
+		return nil, err
+	}
+
 	return &wpAdminAccess{
 		AdminURL:      "http://" + domain + "/wp-admin",
 		AdminUser:     adminUser,
 		AdminPassword: adminPassword,
+		SecretsFile:   secretsPath,
 	}, nil
 }
 
@@ -804,10 +813,58 @@ func (s SiteService) createWordPressDatabase(ctx context.Context, dbName, dbUser
 		dbName,
 		escapeSQLString(dbUser),
 	)
-	if _, err := s.runner.Run(ctx, "sh", "-c", "mysql -e \""+sql+"\""); err != nil {
-		return apperr.Wrap(apperr.CodeCommand, "failed to create WordPress database/user (mysql client root access required)", err)
+
+	tmp, err := os.CreateTemp("", "ols-wp-sql-*.sql")
+	if err != nil {
+		return apperr.Wrap(apperr.CodeConfig, "failed to prepare temporary SQL file", err)
 	}
-	return nil
+	tmpPath := tmp.Name()
+	if _, err := tmp.WriteString(sql + "\n"); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return apperr.Wrap(apperr.CodeConfig, "failed to write temporary SQL file", err)
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return apperr.Wrap(apperr.CodeConfig, "failed to finalize temporary SQL file", err)
+	}
+	defer func() {
+		_ = os.Remove(tmpPath)
+	}()
+
+	if _, err := s.runner.Run(ctx, "sh", "-c", "mysql < "+shellSingleQuote(tmpPath)); err == nil {
+		return nil
+	}
+	if _, err := s.runner.Run(ctx, "sh", "-c", "mariadb < "+shellSingleQuote(tmpPath)); err == nil {
+		return nil
+	}
+
+	return apperr.New(
+		apperr.CodeCommand,
+		"failed to create WordPress database/user; ensure local root DB access is available (sudo/root + mysql or mariadb client)",
+	)
+}
+
+func (s SiteService) persistWordPressSecrets(domain, dbName, dbUser, dbPassword, adminUser, adminPassword string) (string, error) {
+	secretsDir := filepath.Join(defaultSecretsRoot, domain)
+	if err := os.MkdirAll(secretsDir, 0o700); err != nil {
+		return "", apperr.Wrap(apperr.CodeConfig, "failed to create site secrets directory", err)
+	}
+
+	secretsPath := filepath.Join(secretsDir, "credentials.txt")
+	content := fmt.Sprintf(
+		"DOMAIN=%s\nDB_NAME=%s\nDB_USER=%s\nDB_PASSWORD=%s\nWP_ADMIN_USER=%s\nWP_ADMIN_PASSWORD=%s\n",
+		domain,
+		dbName,
+		dbUser,
+		dbPassword,
+		adminUser,
+		adminPassword,
+	)
+	if err := os.WriteFile(secretsPath, []byte(content), 0o600); err != nil {
+		return "", apperr.Wrap(apperr.CodeConfig, "failed to persist site credentials", err)
+	}
+	return secretsPath, nil
 }
 
 func (s SiteService) resolvePHPCLIPath(phpVersion string) (string, error) {
@@ -910,6 +967,10 @@ func generateSecurePassword(length int) (string, error) {
 
 func escapeSQLString(v string) string {
 	return strings.ReplaceAll(v, "'", "''")
+}
+
+func shellSingleQuote(v string) string {
+	return "'" + strings.ReplaceAll(v, "'", "'\\''") + "'"
 }
 
 func installLiteSpeedCachePlugin(docRoot string) error {
