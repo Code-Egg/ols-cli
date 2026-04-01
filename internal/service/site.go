@@ -406,8 +406,12 @@ func (s SiteService) registerDomainInServerConfig(domain, siteRoot, vhostConfigP
 	}
 
 	updated := strings.TrimRight(cfg, "\n") + "\n\n" + buildVHostDefinition(domain, siteRoot, vhostConfigPath) + "\n"
-	updated, mappedHTTP := ensureDomainMappedInNamedListener(updated, "Default", domain)
-	updated, mappedHTTPS := ensureDomainMappedInNamedListener(updated, "SSL", domain)
+	lines := strings.Split(updated, "\n")
+	httpListenerName := chooseExistingListenerName(lines, []string{"HTTP", "Default"}, "HTTP")
+	httpsListenerName := chooseExistingListenerName(lines, []string{"HTTPS", "SSL"}, "HTTPS")
+
+	updated, mappedHTTP := ensureDomainMappedInNamedListener(updated, httpListenerName, domain)
+	updated, mappedHTTPS := ensureDomainMappedInNamedListener(updated, httpsListenerName, domain)
 
 	mappedFallback := false
 	if !mappedHTTP && !mappedHTTPS {
@@ -423,10 +427,10 @@ func (s SiteService) registerDomainInServerConfig(domain, siteRoot, vhostConfigP
 
 	s.console.Bullet("Registered virtual host in " + serverConfigPath)
 	if mappedHTTP {
-		s.console.Bullet("Mapped domain in HTTP listener (Default): " + domain)
+		s.console.Bullet("Mapped domain in HTTP listener (" + httpListenerName + "): " + domain)
 	}
 	if mappedHTTPS {
-		s.console.Bullet("Mapped domain in HTTPS listener (SSL): " + domain)
+		s.console.Bullet("Mapped domain in HTTPS listener (" + httpsListenerName + "): " + domain)
 	}
 	if mappedFallback {
 		s.console.Bullet("Mapped domain in first listener: " + domain)

@@ -21,10 +21,13 @@ func (s SiteService) configureRuntimeListeners(httpPort, httpsPort int, sslCertF
 		return apperr.Wrap(apperr.CodeConfig, "failed to read OpenLiteSpeed server config", err)
 	}
 	cfg := string(b)
+	lines := strings.Split(cfg, "\n")
+	httpListenerName := chooseExistingListenerName(lines, []string{"HTTP", "Default"}, "HTTP")
+	httpsListenerName := chooseExistingListenerName(lines, []string{"HTTPS", "SSL"}, "HTTPS")
 
 	updated, changedHTTP, err := upsertListenerDirectives(
 		cfg,
-		"Default",
+		httpListenerName,
 		[]listenerDirective{{key: "address", value: fmt.Sprintf("*:%d", httpPort)}, {key: "secure", value: "0"}},
 		[]string{"keyFile", "certFile"},
 	)
@@ -34,7 +37,7 @@ func (s SiteService) configureRuntimeListeners(httpPort, httpsPort int, sslCertF
 
 	updated, changedHTTPS, err := upsertListenerDirectives(
 		updated,
-		"SSL",
+		httpsListenerName,
 		[]listenerDirective{
 			{key: "address", value: fmt.Sprintf("*:%d", httpsPort)},
 			{key: "secure", value: "1"},
@@ -47,8 +50,8 @@ func (s SiteService) configureRuntimeListeners(httpPort, httpsPort int, sslCertF
 		return err
 	}
 
-	updated, mappedHTTP := ensureDomainMapsCopied(updated, "Default", "SSL")
-	updated, mappedHTTPS := ensureDomainMapsCopied(updated, "SSL", "Default")
+	updated, mappedHTTP := ensureDomainMapsCopied(updated, httpListenerName, httpsListenerName)
+	updated, mappedHTTPS := ensureDomainMapsCopied(updated, httpsListenerName, httpListenerName)
 
 	if !changedHTTP && !changedHTTPS && !mappedHTTP && !mappedHTTPS {
 		s.console.Bullet("OpenLiteSpeed listeners already match requested defaults")
@@ -61,6 +64,18 @@ func (s SiteService) configureRuntimeListeners(httpPort, httpsPort int, sslCertF
 
 	s.console.Bullet("Updated server config: " + serverConfigPath)
 	return nil
+}
+
+func chooseExistingListenerName(lines []string, candidates []string, fallback string) string {
+	for _, name := range candidates {
+		if strings.TrimSpace(name) == "" {
+			continue
+		}
+		if start, end := findListenerBlockByName(lines, name); start >= 0 && end >= 0 {
+			return name
+		}
+	}
+	return fallback
 }
 
 func upsertListenerDirectives(cfg, listenerName string, directives []listenerDirective, removeKeys []string) (string, bool, error) {
