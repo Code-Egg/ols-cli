@@ -10,9 +10,9 @@ It is currently focused on clear command behavior, predictable output, and safe 
   - Ubuntu / Debian
   - CentOS-family (CentOS, Rocky, AlmaLinux)
 - Commands available:
-  - `ols install [--php74|--php80|--php81|--php82|--php83|--php84]`
-  - `ols site create <domain> --wp [--le] [--php74|--php80|--php81|--php82|--php83|--php84]`
-  - `ols site update <domain> [--wp] --php74|--php80|--php81|--php82|--php83|--php84`
+  - `ols install [--php81|--php82|--php83|--php84|--php85] [--database mariadb|mysql|none] [--config /path/install.json]`
+  - `ols site create <domain> --wp [--le] [--php81|--php82|--php83|--php84|--php85]`
+  - `ols site update <domain> [--wp] --php81|--php82|--php83|--php84|--php85`
 - Structured errors with stable machine-readable codes
 - Styled terminal output for clearer operations
 - Unit tests and CI scaffold
@@ -51,10 +51,10 @@ Contains Debian packaging metadata (`debian/control`, `debian/rules`, etc.) for 
 
 ## One-time server bootstrap (recommended)
 
-Use `ols install` before first site provisioning. It configures LiteSpeed repository access and installs OpenLiteSpeed + selected PHP runtime.
+Use `ols install` before first site provisioning. It configures LiteSpeed repository access, installs OpenLiteSpeed + selected PHP runtime + selected database, and can configure listeners for HTTP/HTTPS.
 
 ```bash
-sudo ols install --php82
+sudo ols install --php85 --database mariadb
 ```
 
 Then create sites with `ols site create ...`.
@@ -64,13 +64,35 @@ Then create sites with `ols site create ...`.
 ### Install runtime once (required before provisioning)
 
 ```bash
-sudo ols install --php82
+sudo ols install --php85 --database mariadb
+```
+
+You can switch database engine:
+
+```bash
+sudo ols install --php83 --database mysql
+sudo ols install --php85 --database none
+```
+
+Use config file defaults (recommended for first-run bootstrap):
+
+```bash
+sudo mkdir -p /etc/ols-cli
+sudo cp docs/install.example.json /etc/ols-cli/install.json
+sudo ols install
+```
+
+Override config values with flags when needed:
+
+```bash
+sudo ols install --config /etc/ols-cli/install.json --php85 --database mysql --http-port 80 --https-port 443
+sudo ols install --no-listeners
 ```
 
 ### Create a site with WordPress + Let's Encrypt
 
 ```bash
-sudo ols site create example.com --wp --le --php82
+sudo ols site create example.com --wp --le --php85
 ```
 
 This command now creates:
@@ -90,7 +112,7 @@ sudo ols site create example.com --wp
 ### Update a site to a target PHP version
 
 ```bash
-sudo ols site update example.com --php82
+sudo ols site update example.com --php85
 ```
 
 ### Update a site and ensure WordPress + LiteSpeed Cache exist
@@ -102,7 +124,7 @@ sudo ols site update example.com --wp --php83
 ### Preview operations without making changes
 
 ```bash
-ols --dry-run site create example.com --wp --le --php82
+ols --dry-run site create example.com --wp --le --php85
 ols --dry-run site update example.com --wp --php83
 ```
 
@@ -168,7 +190,7 @@ go build -o ols ./cmd/ols
 
 ```bash
 ./ols --help
-./ols --dry-run site create example.com --wp --le --php82
+./ols --dry-run site create example.com --wp --le --php85
 ```
 
 ## Common build issue: missing go.sum entries

@@ -88,7 +88,7 @@ func TestInstallRuntimeDryRun(t *testing.T) {
 		console,
 	)
 
-	err := svc.InstallRuntime(context.Background(), InstallOptions{PHPVersion: "82", DryRun: true})
+	err := svc.InstallRuntime(context.Background(), InstallOptions{PHPVersion: "82", DryRun: true, ConfigPath: filepath.Join(t.TempDir(), "install.json")})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

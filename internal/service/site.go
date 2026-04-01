@@ -58,8 +58,15 @@ func NewSiteServiceWithPaths(detector platform.Detector, run runner.Runner, cons
 }
 
 type InstallOptions struct {
-	PHPVersion string
-	DryRun     bool
+	PHPVersion         string
+	DatabaseEngine     string
+	ConfigPath         string
+	ConfigureListeners *bool
+	HTTPPort           int
+	HTTPSPort          int
+	SSLCertFile        string
+	SSLKeyFile         string
+	DryRun             bool
 }
 
 type CreateSiteOptions struct {
@@ -78,21 +85,23 @@ type UpdateSiteOptions struct {
 }
 
 func (s SiteService) InstallRuntime(ctx context.Context, opts InstallOptions) error {
-	phpVersion, err := NormalizePHPVersion(opts.PHPVersion)
-	if err != nil {
-		return err
-	}
-
 	info, err := s.detector.Detect(ctx)
 	if err != nil {
 		return err
 	}
 
-	pkgs := packagesForInstall(phpVersion)
+	plan, err := resolveInstallPlan(opts, info, s.lswsRoot)
+	if err != nil {
+		return err
+	}
+
+	pkgs := packagesForInstall(plan.PHPVersion, plan.DatabasePackage)
 
 	s.console.Section("Install runtime")
 	s.console.Bullet("Platform: " + info.Summary())
-	s.console.Bullet("PHP: lsphp" + phpVersion)
+	s.console.Bullet("Config: " + plan.ConfigPath)
+	s.console.Bullet("PHP: lsphp" + plan.PHPVersion)
+	s.console.Bullet("Database: " + plan.DatabaseEngine)
 	for _, p := range pkgs {
 		s.console.Bullet("Package: " + p)
 	}
@@ -101,6 +110,15 @@ func (s SiteService) InstallRuntime(ctx context.Context, opts InstallOptions) er
 		s.console.Warn("Dry-run enabled: no system changes were made")
 		s.console.Bullet("configure LiteSpeed package repository")
 		s.console.Bullet("install runtime packages")
+		if plan.ConfigureListeners {
+			s.console.Bullet(fmt.Sprintf("configure listeners in %s/conf/httpd_config.conf", s.lswsRoot))
+			s.console.Bullet(fmt.Sprintf("HTTP listener port: %d", plan.HTTPPort))
+			s.console.Bullet(fmt.Sprintf("HTTPS listener port: %d", plan.HTTPSPort))
+			s.console.Bullet("SSL cert: " + plan.SSLCertFile)
+			s.console.Bullet("SSL key: " + plan.SSLKeyFile)
+		} else {
+			s.console.Bullet("skip listener configuration")
+		}
 		s.console.Success("Dry-run plan generated")
 		return nil
 	}
@@ -114,8 +132,17 @@ func (s SiteService) InstallRuntime(ctx context.Context, opts InstallOptions) er
 		return err
 	}
 
+	if plan.ConfigureListeners {
+		if err := s.configureRuntimeListeners(plan.HTTPPort, plan.HTTPSPort, plan.SSLCertFile, plan.SSLKeyFile); err != nil {
+			return err
+		}
+	}
+
 	s.console.Success("OpenLiteSpeed runtime installed")
 	s.console.Bullet("Binary: " + filepath.Join(s.lswsRoot, "bin", "lswsctrl"))
+	if plan.ConfigureListeners {
+		s.console.Bullet(fmt.Sprintf("Listeners configured: HTTP %d / HTTPS %d", plan.HTTPPort, plan.HTTPSPort))
+	}
 	return nil
 }
 
@@ -751,18 +778,17 @@ func NormalizePHPVersion(in string) (string, error) {
 	candidate = strings.ReplaceAll(candidate, ".", "")
 
 	supported := map[string]struct{}{
-		"74": {},
-		"80": {},
 		"81": {},
 		"82": {},
 		"83": {},
 		"84": {},
+		"85": {},
 	}
 
 	if _, ok := supported[candidate]; !ok {
 		return "", apperr.New(
 			apperr.CodeValidation,
-			fmt.Sprintf("unsupported PHP version: %q (allowed: 74,80,81,82,83,84)", in),
+			fmt.Sprintf("unsupported PHP version: %q (allowed: 81,82,83,84,85)", in),
 		)
 	}
 
@@ -783,8 +809,12 @@ func ValidateDomain(domain string) error {
 	return nil
 }
 
-func packagesForInstall(phpVersion string) []string {
-	return []string{"openlitespeed", "lsphp" + phpVersion, "lsphp" + phpVersion + "-mysql"}
+func packagesForInstall(phpVersion, databasePackage string) []string {
+	pkgs := []string{"openlitespeed", "lsphp" + phpVersion, "lsphp" + phpVersion + "-mysql"}
+	if strings.TrimSpace(databasePackage) != "" {
+		pkgs = append(pkgs, databasePackage)
+	}
+	return pkgs
 }
 
 func packagesForPHPUpdate(phpVersion string) []string {

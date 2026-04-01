@@ -15,26 +15,17 @@ type siteManager interface {
 }
 
 type phpFlags struct {
-	v74 bool
-	v80 bool
 	v81 bool
 	v82 bool
 	v83 bool
 	v84 bool
+	v85 bool
 }
 
 func (f phpFlags) selected(defaultVersion string) (string, error) {
 	selected := ""
 	count := 0
 
-	if f.v74 {
-		selected = "74"
-		count++
-	}
-	if f.v80 {
-		selected = "80"
-		count++
-	}
 	if f.v81 {
 		selected = "81"
 		count++
@@ -51,9 +42,13 @@ func (f phpFlags) selected(defaultVersion string) (string, error) {
 		selected = "84"
 		count++
 	}
+	if f.v85 {
+		selected = "85"
+		count++
+	}
 
 	if count > 1 {
-		return "", apperr.New(apperr.CodeValidation, "multiple PHP version flags provided; choose only one of --php74/--php80/--php81/--php82/--php83/--php84")
+		return "", apperr.New(apperr.CodeValidation, "multiple PHP version flags provided; choose only one of --php81/--php82/--php83/--php84/--php85")
 	}
 	if count == 0 {
 		return defaultVersion, nil
@@ -62,12 +57,11 @@ func (f phpFlags) selected(defaultVersion string) (string, error) {
 }
 
 func addPHPVersionFlags(cmd *cobra.Command, flags *phpFlags) {
-	cmd.Flags().BoolVar(&flags.v74, "php74", false, "use PHP 7.4")
-	cmd.Flags().BoolVar(&flags.v80, "php80", false, "use PHP 8.0")
 	cmd.Flags().BoolVar(&flags.v81, "php81", false, "use PHP 8.1")
 	cmd.Flags().BoolVar(&flags.v82, "php82", false, "use PHP 8.2")
 	cmd.Flags().BoolVar(&flags.v83, "php83", false, "use PHP 8.3")
 	cmd.Flags().BoolVar(&flags.v84, "php84", false, "use PHP 8.4")
+	cmd.Flags().BoolVar(&flags.v85, "php85", false, "use PHP 8.5")
 }
 
 func newSiteCmd(svc siteManager, rootOpts *rootOptions) *cobra.Command {
@@ -91,10 +85,10 @@ func newSiteCreateCmd(svc siteManager, rootOpts *rootOptions) *cobra.Command {
 		Short: "Create a new OpenLiteSpeed virtual host",
 		Example: "ols site create example.com --wp\n" +
 			"ols site create example.com --wp --php84\n" +
-			"ols --dry-run site create example.com --wp --le --php82",
+			"ols --dry-run site create example.com --wp --le --php85",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			phpVersion, err := php.selected("82")
+			phpVersion, err := php.selected("85")
 			if err != nil {
 				return err
 			}
@@ -127,7 +121,7 @@ func newSiteUpdateCmd(svc siteManager, rootOpts *rootOptions) *cobra.Command {
 		Short: "Update existing site configuration",
 		Example: "ols site update example.com --php83\n" +
 			"ols site update example.com --wp --php84\n" +
-			"ols --dry-run site update example.com --wp --php82",
+			"ols --dry-run site update example.com --wp --php85",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			phpVersion, err := php.selected("")
@@ -135,7 +129,7 @@ func newSiteUpdateCmd(svc siteManager, rootOpts *rootOptions) *cobra.Command {
 				return err
 			}
 			if phpVersion == "" {
-				return apperr.New(apperr.CodeValidation, "missing PHP version flag; provide one of --php74/--php80/--php81/--php82/--php83/--php84")
+				return apperr.New(apperr.CodeValidation, "missing PHP version flag; provide one of --php81/--php82/--php83/--php84/--php85")
 			}
 			err = svc.UpdateSitePHP(cmd.Context(), service.UpdateSiteOptions{
 				Domain:        args[0],

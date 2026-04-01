@@ -1,0 +1,9 @@
+{
+  "php_version": "85",
+  "database": "mariadb",
+  "configure_listeners": true,
+  "http_port": 80,
+  "https_port": 443,
+  "ssl_cert_file": "/usr/local/lsws/admin/conf/webadmin.crt",
+  "ssl_key_file": "/usr/local/lsws/admin/conf/webadmin.key"
+}
