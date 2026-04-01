@@ -101,9 +101,11 @@ This command now creates:
 - Document root under `/var/www/<domain>/html`
 - WordPress files when `--wp` is enabled
 - LiteSpeed Cache plugin in `wp-content/plugins/litespeed-cache` when `--wp` is enabled
-- Domain registration into `/usr/local/lsws/conf/httpd_config.conf` (virtualhost + first listener map)
+- WordPress database/user + `wp-config.php` + `wp core install` when `--wp` is enabled
+- Console output with WordPress admin URL, admin user, and generated admin password when `--wp` is enabled
+- Domain registration into `/usr/local/lsws/conf/httpd_config.conf` (virtualhost + listener maps for `Default` and `SSL` when present)
 
-### Create a site with defaults (WordPress + PHP 8.2)
+### Create a site with defaults (WordPress + PHP 8.5)
 
 ```bash
 sudo ols site create example.com --wp

@@ -47,7 +47,10 @@ func (s SiteService) configureRuntimeListeners(httpPort, httpsPort int, sslCertF
 		return err
 	}
 
-	if !changedHTTP && !changedHTTPS {
+	updated, mappedHTTP := ensureDomainMapsCopied(updated, "Default", "SSL")
+	updated, mappedHTTPS := ensureDomainMapsCopied(updated, "SSL", "Default")
+
+	if !changedHTTP && !changedHTTPS && !mappedHTTP && !mappedHTTPS {
 		s.console.Bullet("OpenLiteSpeed listeners already match requested defaults")
 		return nil
 	}
@@ -180,16 +183,21 @@ func upsertDirective(lines []string, key, value string) ([]string, bool) {
 		if len(fields) == 0 || fields[0] != key {
 			continue
 		}
+
+		currentValue := ""
+		if len(fields) > 1 {
+			currentValue = strings.Join(fields[1:], " ")
+		}
+		if currentValue == value {
+			return lines, false
+		}
+
 		indent := ""
 		idx := strings.Index(line, fields[0])
 		if idx > 0 {
 			indent = line[:idx]
 		}
-		replacement := formatDirectiveLine(indent, key, value)
-		if line == replacement {
-			return lines, false
-		}
-		lines[i] = replacement
+		lines[i] = formatDirectiveLine(indent, key, value)
 		return lines, true
 	}
 
@@ -225,4 +233,87 @@ func buildListenerBlock(name string, directives []listenerDirective) string {
 	}
 	lines = append(lines, "}")
 	return strings.Join(lines, "\n")
+}
+
+func ensureDomainMapsCopied(cfg, srcListener, dstListener string) (string, bool) {
+	lines := strings.Split(cfg, "\n")
+	srcStart, srcEnd := findListenerBlockByName(lines, srcListener)
+	dstStart, dstEnd := findListenerBlockByName(lines, dstListener)
+	if srcStart < 0 || srcEnd < 0 || dstStart < 0 || dstEnd < 0 {
+		return cfg, false
+	}
+
+	srcDomains := make([]string, 0)
+	for i := srcStart; i <= srcEnd; i++ {
+		line := strings.TrimSpace(lines[i])
+		if !strings.HasPrefix(line, "map ") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 3 {
+			continue
+		}
+		for _, token := range fields[2:] {
+			for _, host := range strings.Split(token, ",") {
+				host = strings.TrimSpace(host)
+				if host == "" || host == "*" {
+					continue
+				}
+				srcDomains = append(srcDomains, host)
+			}
+		}
+	}
+	if len(srcDomains) == 0 {
+		return cfg, false
+	}
+
+	dstBody := append([]string{}, lines[dstStart+1:dstEnd]...)
+	changed := false
+	for _, domain := range srcDomains {
+		if listenerBodyHasDomainMap(dstBody, domain) {
+			continue
+		}
+		indent := detectMapIndent(lines[dstStart : dstEnd+1])
+		dstBody = append(dstBody, fmt.Sprintf("%smap                     %s %s", indent, domain, domain))
+		changed = true
+	}
+	if !changed {
+		return cfg, false
+	}
+
+	newBlock := []string{lines[dstStart]}
+	newBlock = append(newBlock, dstBody...)
+	newBlock = append(newBlock, lines[dstEnd])
+
+	updated := append([]string{}, lines[:dstStart]...)
+	updated = append(updated, newBlock...)
+	updated = append(updated, lines[dstEnd+1:]...)
+	return strings.Join(updated, "\n"), true
+}
+
+func listenerBodyHasDomainMap(lines []string, domain string) bool {
+	for _, line := range lines {
+		if listenerMapLineContainsDomain(strings.TrimSpace(line), domain) {
+			return true
+		}
+	}
+	return false
+}
+
+func listenerMapLineContainsDomain(line, domain string) bool {
+	if !strings.HasPrefix(line, "map ") {
+		return false
+	}
+	fields := strings.Fields(line)
+	if len(fields) < 3 {
+		return false
+	}
+	for _, token := range fields[2:] {
+		for _, host := range strings.Split(token, ",") {
+			if strings.EqualFold(strings.TrimSpace(host), domain) {
+				return true
+			}
+		}
+	}
+	return false
 }

@@ -90,3 +90,30 @@ func TestUpsertListenerDirectivesRemoveKeys(t *testing.T) {
 		t.Fatalf("expected key/cert directives removed, got: %s", updated)
 	}
 }
+
+func TestEnsureDomainMapsCopiedToSSL(t *testing.T) {
+	cfg := "listener Default {\n  address                 *:80\n  secure                  0\n  map                     example.com example.com\n}\n\nlistener SSL {\n  address                 *:443\n  secure                  1\n  keyFile                 /tmp/key\n  certFile                /tmp/cert\n}\n"
+
+	updated, changed := ensureDomainMapsCopied(cfg, "Default", "SSL")
+	if !changed {
+		t.Fatal("expected changed=true")
+	}
+	if !strings.Contains(updated, "listener SSL {") {
+		t.Fatalf("expected SSL listener present, got: %s", updated)
+	}
+	if !strings.Contains(updated, "map                     example.com example.com") {
+		t.Fatalf("expected map copied to SSL listener, got: %s", updated)
+	}
+}
+
+func TestEnsureDomainMapsCopiedNoChangeWhenAlreadyMapped(t *testing.T) {
+	cfg := "listener Default {\n  address                 *:80\n  secure                  0\n  map                     example.com example.com\n}\n\nlistener SSL {\n  address                 *:443\n  secure                  1\n  map                     example.com example.com\n}\n"
+
+	updated, changed := ensureDomainMapsCopied(cfg, "Default", "SSL")
+	if changed {
+		t.Fatal("expected changed=false")
+	}
+	if updated != cfg {
+		t.Fatalf("expected config unchanged")
+	}
+}

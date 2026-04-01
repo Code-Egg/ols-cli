@@ -76,6 +76,9 @@ func TestCreateSiteDryRun(t *testing.T) {
 	if len(r.calls) != 0 {
 		t.Fatalf("expected no runner calls in dry-run, got %d", len(r.calls))
 	}
+	if !strings.Contains(out.String(), "finish WordPress installation via wp-cli") {
+		t.Fatalf("expected wp-cli plan output, got: %s", out.String())
+	}
 }
 
 func TestInstallRuntimeDryRun(t *testing.T) {
@@ -272,5 +275,25 @@ func TestUpdateSitePHPSwitchesHandler(t *testing.T) {
 	}
 	if !strings.Contains(string(updated), "lsphp83") {
 		t.Fatalf("expected new handler present, got: %s", string(updated))
+	}
+}
+
+func TestDeriveWordPressDBIdentifiers(t *testing.T) {
+	dbName, dbUser := deriveWordPressDBIdentifiers("Example-99.com")
+	if dbName != "wp_example_99_com" {
+		t.Fatalf("unexpected db name: %s", dbName)
+	}
+	if dbUser != "wpu_example_99_com" {
+		t.Fatalf("unexpected db user: %s", dbUser)
+	}
+}
+
+func TestGenerateSecurePasswordLength(t *testing.T) {
+	password, err := generateSecurePassword(20)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(password) != 20 {
+		t.Fatalf("expected length 20, got %d", len(password))
 	}
 }
