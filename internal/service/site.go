@@ -9,6 +9,7 @@ import (
 	crand "crypto/rand"
 	"fmt"
 	"io"
+	"io/fs"
 	"math/big"
 	"net/http"
 	"os"
@@ -88,6 +89,12 @@ type UpdateSiteOptions struct {
 	WithWordPress bool
 	PHPVersion    string
 	DryRun        bool
+}
+
+type DeleteSiteOptions struct {
+	Domain       string
+	DropDatabase bool
+	DryRun       bool
 }
 
 func (s SiteService) InstallRuntime(ctx context.Context, opts InstallOptions) error {
@@ -199,6 +206,7 @@ func (s SiteService) CreateSite(ctx context.Context, opts CreateSiteOptions) err
 		s.console.Bullet("write " + vhostDefinition)
 		s.console.Bullet("append virtualhost block into " + serverConfigPath)
 		s.console.Bullet("insert listener map in " + serverConfigPath)
+		s.console.Bullet("apply ownership from OpenLiteSpeed user/group in " + serverConfigPath)
 		if opts.WithWordPress {
 			s.console.Bullet("download and extract WordPress into " + docRoot)
 			s.console.Bullet("download and install LiteSpeed Cache plugin")
@@ -212,6 +220,7 @@ func (s SiteService) CreateSite(ctx context.Context, opts CreateSiteOptions) err
 		if opts.WithLE {
 			s.console.Bullet("perform domain reachability precheck for Let's Encrypt")
 		}
+		s.console.Bullet("reload OpenLiteSpeed")
 		s.console.Success("Dry-run plan generated")
 		return nil
 	}
@@ -238,9 +247,6 @@ func (s SiteService) CreateSite(ctx context.Context, opts CreateSiteOptions) err
 	if err := os.WriteFile(vhostDefinition, []byte(buildVHostDefinition(opts.Domain, siteRoot, vhostConfig)), 0o644); err != nil {
 		return apperr.Wrap(apperr.CodeConfig, "failed to write vhost definition", err)
 	}
-	if err := s.inheritOwnershipFromParent(vhostDir, vhostConfig, vhostDefinition); err != nil {
-		s.console.Warn("Could not align ownership for virtual host files: " + err.Error())
-	}
 
 	if opts.WithWordPress {
 		if err := ensureWordPressWithLSCache(docRoot); err != nil {
@@ -256,6 +262,10 @@ func (s SiteService) CreateSite(ctx context.Context, opts CreateSiteOptions) err
 		if err := ensureStarterIndex(docRoot, opts.Domain); err != nil {
 			return err
 		}
+	}
+
+	if err := s.applyServerConfiguredOwnership(serverConfigPath, siteRoot, vhostDir); err != nil {
+		s.console.Warn("Could not align site ownership with OpenLiteSpeed user/group: " + err.Error())
 	}
 
 	if err := s.registerDomainInServerConfig(opts.Domain, siteRoot, vhostConfig, serverConfigPath); err != nil {
@@ -363,6 +373,70 @@ func (s SiteService) UpdateSitePHP(ctx context.Context, opts UpdateSiteOptions) 
 	return nil
 }
 
+func (s SiteService) DeleteSite(ctx context.Context, opts DeleteSiteOptions) error {
+	if err := ValidateDomain(opts.Domain); err != nil {
+		return err
+	}
+
+	siteRoot := filepath.Join(s.webRoot, opts.Domain)
+	vhostDir := filepath.Join(s.lswsRoot, "conf", "vhosts", opts.Domain)
+	serverConfigPath := filepath.Join(s.lswsRoot, "conf", "httpd_config.conf")
+	secretsPath := filepath.Join(defaultSecretsRoot, opts.Domain)
+
+	s.console.Section("Delete site")
+	s.console.Bullet("Domain: " + opts.Domain)
+	s.console.Bullet("Document root: " + filepath.Join(siteRoot, "html"))
+	s.console.Bullet("VHost directory: " + vhostDir)
+	s.console.Bullet("Server config: " + serverConfigPath)
+	if opts.DropDatabase {
+		s.console.Bullet("Drop database: enabled")
+	}
+
+	if opts.DryRun {
+		s.console.Warn("Dry-run enabled: no system changes were made")
+		s.console.Bullet("remove domain maps and virtualhost block from " + serverConfigPath)
+		s.console.Bullet("remove " + vhostDir)
+		s.console.Bullet("remove " + siteRoot)
+		s.console.Bullet("remove " + secretsPath)
+		if opts.DropDatabase {
+			s.console.Bullet("drop WordPress database and database user")
+		}
+		s.console.Bullet("reload OpenLiteSpeed")
+		s.console.Success("Dry-run plan generated")
+		return nil
+	}
+
+	if err := s.removeDomainFromServerConfig(opts.Domain, serverConfigPath); err != nil {
+		return err
+	}
+	if err := removeIfExists(vhostDir); err != nil {
+		return apperr.Wrap(apperr.CodeConfig, "failed to remove virtual host directory", err)
+	}
+	if err := removeIfExists(siteRoot); err != nil {
+		return apperr.Wrap(apperr.CodeConfig, "failed to remove site root", err)
+	}
+	if err := removeIfExists(secretsPath); err != nil {
+		return apperr.Wrap(apperr.CodeConfig, "failed to remove site secrets", err)
+	}
+
+	if opts.DropDatabase {
+		if err := s.dropWordPressDatabase(ctx, opts.Domain); err != nil {
+			return err
+		}
+		s.console.Success("WordPress database/user removed")
+	}
+
+	if err := s.reloadOpenLiteSpeed(ctx); err != nil {
+		s.console.Warn("Failed to reload OpenLiteSpeed automatically: " + err.Error())
+	}
+
+	s.console.Success("Site deleted")
+	s.console.Bullet("Removed vhost directory: " + vhostDir)
+	s.console.Bullet("Removed site root: " + siteRoot)
+	s.console.Bullet("Server config updated: " + serverConfigPath)
+	return nil
+}
+
 func (s SiteService) configureLiteSpeedRepo(ctx context.Context, info platform.Info) error {
 	switch info.PackageManager {
 	case platform.PackageManagerAPT, platform.PackageManagerYUM, platform.PackageManagerDNF:
@@ -441,6 +515,31 @@ func (s SiteService) registerDomainInServerConfig(domain, siteRoot, vhostConfigP
 	if mappedFallback {
 		s.console.Bullet("Mapped domain in first listener: " + domain)
 	}
+	return nil
+}
+
+func (s SiteService) removeDomainFromServerConfig(domain, serverConfigPath string) error {
+	b, err := os.ReadFile(serverConfigPath)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeConfig, "failed to read OpenLiteSpeed server config", err)
+	}
+	cfg := string(b)
+
+	updated, removedVHost, err := removeVirtualHostBlock(cfg, domain)
+	if err != nil {
+		return err
+	}
+	updated, removedMaps := removeDomainMappings(updated, domain)
+	if !removedVHost && !removedMaps {
+		s.console.Warn("No matching virtualhost/map entries found for " + domain)
+		return nil
+	}
+
+	if err := os.WriteFile(serverConfigPath, []byte(updated), 0o644); err != nil {
+		return apperr.Wrap(apperr.CodeConfig, "failed to update OpenLiteSpeed server config", err)
+	}
+
+	s.console.Bullet("Removed domain config from " + serverConfigPath)
 	return nil
 }
 
@@ -547,6 +646,95 @@ func mapLineContainsDomain(line, domain string) bool {
 		}
 	}
 	return false
+}
+
+func removeVirtualHostBlock(cfg, domain string) (string, bool, error) {
+	lines := strings.Split(cfg, "\n")
+	start, end := findVirtualHostBlockByName(lines, domain)
+	if start < 0 || end < 0 {
+		return cfg, false, nil
+	}
+	updatedLines := append([]string{}, lines[:start]...)
+	updatedLines = append(updatedLines, lines[end+1:]...)
+	return strings.Join(updatedLines, "\n"), true, nil
+}
+
+func findVirtualHostBlockByName(lines []string, domain string) (int, int) {
+	start := -1
+	depth := 0
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if start == -1 {
+			if !strings.HasPrefix(trimmed, "virtualhost ") || !strings.Contains(trimmed, "{") {
+				continue
+			}
+			header := strings.TrimSpace(strings.SplitN(trimmed, "{", 2)[0])
+			parts := strings.Fields(header)
+			if len(parts) < 2 || !strings.EqualFold(parts[1], domain) {
+				continue
+			}
+			start = i
+			depth = strings.Count(line, "{") - strings.Count(line, "}")
+			if depth <= 0 {
+				depth = 1
+			}
+			continue
+		}
+		depth += strings.Count(line, "{")
+		depth -= strings.Count(line, "}")
+		if depth == 0 {
+			return start, i
+		}
+	}
+	return -1, -1
+}
+
+func removeDomainMappings(cfg, domain string) (string, bool) {
+	lines := strings.Split(cfg, "\n")
+	changed := false
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "map ") {
+			continue
+		}
+		fields := strings.Fields(trimmed)
+		if len(fields) < 3 {
+			continue
+		}
+		mapName := fields[1]
+		keptHosts := make([]string, 0, len(fields)-2)
+		removed := false
+		for _, token := range fields[2:] {
+			for _, host := range strings.Split(token, ",") {
+				host = strings.TrimSpace(host)
+				if host == "" {
+					continue
+				}
+				if strings.EqualFold(host, domain) {
+					removed = true
+					continue
+				}
+				keptHosts = append(keptHosts, host)
+			}
+		}
+		if !removed {
+			continue
+		}
+		changed = true
+		if len(keptHosts) == 0 {
+			lines[i] = ""
+			continue
+		}
+		indent := ""
+		if idx := strings.Index(line, "map"); idx > 0 {
+			indent = line[:idx]
+		}
+		lines[i] = fmt.Sprintf("%smap                     %s %s", indent, mapName, strings.Join(keptHosts, ","))
+	}
+	if !changed {
+		return cfg, false
+	}
+	return strings.Join(lines, "\n"), true
 }
 
 func switchVHostPHPHandler(vhostConfigPath, phpVersion string) error {
@@ -689,6 +877,73 @@ func inheritPathOwnershipFromParent(path string) error {
 		return apperr.Wrap(apperr.CodeConfig, "failed to align ownership with parent", err)
 	}
 	return nil
+}
+
+func (s SiteService) applyServerConfiguredOwnership(serverConfigPath string, paths ...string) error {
+	userName, groupName, err := readServerUserGroup(serverConfigPath)
+	if err != nil {
+		return err
+	}
+	uid, gid, err := lookupUserGroupIDs(userName, groupName)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeConfig, "failed to resolve OpenLiteSpeed user/group IDs", err)
+	}
+	for _, p := range paths {
+		if strings.TrimSpace(p) == "" {
+			continue
+		}
+		if err := applyOwnershipRecursive(p, uid, gid); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func readServerUserGroup(serverConfigPath string) (string, string, error) {
+	b, err := os.ReadFile(serverConfigPath)
+	if err != nil {
+		return "", "", apperr.Wrap(apperr.CodeConfig, "failed to read OpenLiteSpeed server config", err)
+	}
+	cfg := string(b)
+	userName := firstDirectiveValue(cfg, "user")
+	if strings.TrimSpace(userName) == "" {
+		return "", "", apperr.New(apperr.CodeConfig, "missing `user` directive in OpenLiteSpeed server config")
+	}
+	groupName := firstDirectiveValue(cfg, "group")
+	return userName, groupName, nil
+}
+
+func firstDirectiveValue(cfg, key string) string {
+	for _, line := range strings.Split(cfg, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		fields := strings.Fields(trimmed)
+		if len(fields) < 2 {
+			continue
+		}
+		if strings.EqualFold(fields[0], key) {
+			return fields[1]
+		}
+	}
+	return ""
+}
+
+func applyOwnershipRecursive(root string, uid, gid int) error {
+	root = filepath.Clean(root)
+	if !fileExists(root) {
+		return nil
+	}
+	return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if err := chownPath(path, uid, gid); err != nil {
+			return err
+		}
+		return nil
+	})
 }
 
 func installWordPress(docRoot string) error {
@@ -937,6 +1192,51 @@ func (s SiteService) createWordPressDatabase(ctx context.Context, dbName, dbUser
 		apperr.CodeCommand,
 		"failed to create WordPress database/user; ensure local root DB access is available (sudo/root + mysql or mariadb client)",
 	)
+}
+
+func (s SiteService) dropWordPressDatabase(ctx context.Context, domain string) error {
+	dbName, dbUser := deriveWordPressDBIdentifiers(domain)
+	sql := fmt.Sprintf(
+		"DROP DATABASE IF EXISTS `%s`; DROP USER IF EXISTS '%s'@'localhost'; FLUSH PRIVILEGES;",
+		dbName,
+		escapeSQLString(dbUser),
+	)
+
+	tmp, err := os.CreateTemp("", "ols-wp-drop-sql-*.sql")
+	if err != nil {
+		return apperr.Wrap(apperr.CodeConfig, "failed to prepare temporary SQL file", err)
+	}
+	tmpPath := tmp.Name()
+	if _, err := tmp.WriteString(sql + "\n"); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return apperr.Wrap(apperr.CodeConfig, "failed to write temporary SQL file", err)
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return apperr.Wrap(apperr.CodeConfig, "failed to finalize temporary SQL file", err)
+	}
+	defer func() {
+		_ = os.Remove(tmpPath)
+	}()
+
+	if _, err := s.runner.Run(ctx, "sh", "-c", "mysql < "+shellSingleQuote(tmpPath)); err == nil {
+		return nil
+	}
+	if _, err := s.runner.Run(ctx, "sh", "-c", "mariadb < "+shellSingleQuote(tmpPath)); err == nil {
+		return nil
+	}
+
+	return apperr.New(apperr.CodeCommand, "failed to drop WordPress database/user; ensure local root DB access is available")
+}
+
+func removeIfExists(path string) error {
+	path = filepath.Clean(path)
+	err := os.RemoveAll(path)
+	if err == nil || os.IsNotExist(err) {
+		return nil
+	}
+	return err
 }
 
 func (s SiteService) persistWordPressSecrets(domain, dbName, dbUser, dbPassword, adminUser, adminPassword string) (string, error) {
