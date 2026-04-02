@@ -1,4 +1,4 @@
-# ols-cli
+# OLS CLI
 
 A practical CLI for managing the OpenLiteSpeed + WordPress lifecycle on Linux servers.
 
@@ -32,7 +32,7 @@ If release binaries are published, end users do not need to compile from source.
 Pick the correct architecture (`amd64` or `arm64`) and download directly from GitHub Releases.
 
 ```bash
-sudo wget -O /usr/local/bin/ols https://github.com/Code-Egg/ols-cli/releases/download/v0.1.1/ols-linux-amd64
+sudo wget -O /usr/local/bin/ols https://github.com/Code-Egg/ols-cli/releases/latest/download/ols-linux-amd64
 sudo chmod +x /usr/local/bin/ols
 ols --help
 ```
@@ -40,7 +40,7 @@ ols --help
 For ARM64 servers:
 
 ```bash
-sudo wget -O /usr/local/bin/ols https://github.com/Code-Egg/ols-cli/releases/download/v0.1.1/ols-linux-arm64
+sudo wget -O /usr/local/bin/ols https://github.com/Code-Egg/ols-cli/releases/latest/download/ols-linux-arm64
 sudo chmod +x /usr/local/bin/ols
 ols --help
 ```
@@ -48,9 +48,11 @@ ols --help
 Optional checksum verification:
 
 ```bash
-wget https://github.com/Code-Egg/ols-cli/releases/download/v0.1.1/checksums.txt
+wget https://github.com/Code-Egg/ols-cli/releases/latest/download/checksums.txt
 sha256sum /usr/local/bin/ols
 ```
+
+If you need reproducible installs, pin a specific tag instead of `latest`.
 
 If colors do not appear in your terminal, force them explicitly:
 
