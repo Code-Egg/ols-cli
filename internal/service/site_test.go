@@ -314,3 +314,88 @@ func TestGenerateSecurePasswordLength(t *testing.T) {
 		t.Fatalf("expected length 20, got %d", len(password))
 	}
 }
+
+func TestUpsertINIValueReplacesExisting(t *testing.T) {
+	in := "memory_limit = 128M\npost_max_size = 8M\n"
+	out, changed := upsertINIValue(in, "memory_limit", "1024M")
+	if !changed {
+		t.Fatal("expected change when key exists")
+	}
+	if !strings.Contains(out, "memory_limit = 1024M") {
+		t.Fatalf("expected updated memory_limit, got: %s", out)
+	}
+	if strings.Contains(out, "memory_limit = 128M") {
+		t.Fatalf("expected old memory_limit removed, got: %s", out)
+	}
+}
+
+func TestUpsertINIValueAppendsMissing(t *testing.T) {
+	in := "post_max_size = 8M\n"
+	out, changed := upsertINIValue(in, "upload_max_filesize", "1000M")
+	if !changed {
+		t.Fatal("expected change when key is missing")
+	}
+	if !strings.Contains(out, "upload_max_filesize = 1000M") {
+		t.Fatalf("expected appended key, got: %s", out)
+	}
+}
+
+func TestDiscoverLiteSpeedPHPINIPaths(t *testing.T) {
+	root := t.TempDir()
+	pathsToCreate := []string{
+		filepath.Join(root, "lsphp81", "etc", "php", "8.1", "litespeed", "php.ini"),
+		filepath.Join(root, "lsphp85", "etc", "php", "8.5", "litespeed", "php.ini"),
+		filepath.Join(root, "lsphp84", "etc", "php.ini"),
+	}
+	for _, p := range pathsToCreate {
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatalf("mkdir for %s: %v", p, err)
+		}
+		if err := os.WriteFile(p, []byte("memory_limit = 128M\n"), 0o644); err != nil {
+			t.Fatalf("write %s: %v", p, err)
+		}
+	}
+
+	paths, err := discoverLiteSpeedPHPINIPaths(root)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(paths) != 3 {
+		t.Fatalf("expected 3 php.ini files, got %d (%v)", len(paths), paths)
+	}
+}
+
+func TestApplyPHPINISettingsFile(t *testing.T) {
+	iniPath := filepath.Join(t.TempDir(), "php.ini")
+	initial := "post_max_size = 8M\nupload_max_filesize = 2M\n"
+	if err := os.WriteFile(iniPath, []byte(initial), 0o644); err != nil {
+		t.Fatalf("write initial php.ini: %v", err)
+	}
+
+	err := applyPHPINISettingsFile(iniPath, []phpINISetting{
+		{key: "post_max_size", value: "1000M"},
+		{key: "upload_max_filesize", value: "1000M"},
+		{key: "memory_limit", value: "1024M"},
+		{key: "max_execution_time", value: "600"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	b, err := os.ReadFile(iniPath)
+	if err != nil {
+		t.Fatalf("read updated php.ini: %v", err)
+	}
+	content := string(b)
+	checks := []string{
+		"post_max_size = 1000M",
+		"upload_max_filesize = 1000M",
+		"memory_limit = 1024M",
+		"max_execution_time = 600",
+	}
+	for _, c := range checks {
+		if !strings.Contains(content, c) {
+			t.Fatalf("expected %q in php.ini, got: %s", c, content)
+		}
+	}
+}

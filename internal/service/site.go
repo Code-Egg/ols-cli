@@ -16,6 +16,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -33,11 +34,23 @@ var (
 )
 
 const (
-	defaultLSWSRoot      = "/usr/local/lsws"
-	defaultWebRoot       = "/var/www"
-	defaultSecretsRoot   = "/etc/ols-cli/sites"
-	wpCLIPharURL         = "https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar"
+	defaultLSWSRoot    = "/usr/local/lsws"
+	defaultWebRoot     = "/var/www"
+	defaultSecretsRoot = "/etc/ols-cli/sites"
+	wpCLIPharURL       = "https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar"
 )
+
+type phpINISetting struct {
+	key   string
+	value string
+}
+
+var defaultPHPINISettings = []phpINISetting{
+	{key: "post_max_size", value: "1000M"},
+	{key: "upload_max_filesize", value: "1000M"},
+	{key: "memory_limit", value: "1024M"},
+	{key: "max_execution_time", value: "600"},
+}
 
 // SiteService contains site lifecycle workflows.
 type SiteService struct {
@@ -123,6 +136,10 @@ func (s SiteService) InstallRuntime(ctx context.Context, opts InstallOptions) er
 		s.console.Warn("Dry-run enabled: no system changes were made")
 		s.console.Bullet("configure LiteSpeed package repository")
 		s.console.Bullet("install runtime packages")
+		s.console.Bullet("apply managed PHP ini defaults to all detected LiteSpeed runtimes")
+		for _, setting := range defaultPHPINISettings {
+			s.console.Bullet(fmt.Sprintf("php.ini: %s = %s", setting.key, setting.value))
+		}
 		if plan.ConfigureListeners {
 			s.console.Bullet(fmt.Sprintf("configure listeners in %s/conf/httpd_config.conf", s.lswsRoot))
 			s.console.Bullet(fmt.Sprintf("HTTP listener port: %d", plan.HTTPPort))
@@ -145,6 +162,10 @@ func (s SiteService) InstallRuntime(ctx context.Context, opts InstallOptions) er
 		return err
 	}
 
+	if err := s.applyDefaultPHPINISettings(); err != nil {
+		return err
+	}
+
 	if plan.ConfigureListeners {
 		if err := s.configureRuntimeListeners(plan.HTTPPort, plan.HTTPSPort, plan.SSLCertFile, plan.SSLKeyFile); err != nil {
 			return err
@@ -153,6 +174,7 @@ func (s SiteService) InstallRuntime(ctx context.Context, opts InstallOptions) er
 
 	s.console.Success("OpenLiteSpeed runtime installed")
 	s.console.Bullet("Binary: " + filepath.Join(s.lswsRoot, "bin", "lswsctrl"))
+	s.console.Bullet("Default php.ini profile applied to detected LiteSpeed runtimes")
 	if plan.ConfigureListeners {
 		s.console.Bullet(fmt.Sprintf("Listeners configured: HTTP %d / HTTPS %d", plan.HTTPPort, plan.HTTPSPort))
 	}
@@ -435,6 +457,113 @@ func (s SiteService) DeleteSite(ctx context.Context, opts DeleteSiteOptions) err
 	s.console.Bullet("Removed site root: " + siteRoot)
 	s.console.Bullet("Server config updated: " + serverConfigPath)
 	return nil
+}
+
+func (s SiteService) applyDefaultPHPINISettings() error {
+	iniPaths, err := discoverLiteSpeedPHPINIPaths(s.lswsRoot)
+	if err != nil {
+		return err
+	}
+	if len(iniPaths) == 0 {
+		s.console.Warn("No LiteSpeed php.ini files were found under " + s.lswsRoot + "; skipped applying defaults")
+		return nil
+	}
+
+	for _, iniPath := range iniPaths {
+		if err := applyPHPINISettingsFile(iniPath, defaultPHPINISettings); err != nil {
+			return err
+		}
+		s.console.Bullet("Applied php.ini defaults: " + iniPath)
+	}
+	return nil
+}
+
+func discoverLiteSpeedPHPINIPaths(lswsRoot string) ([]string, error) {
+	matches := map[string]struct{}{}
+
+	phpRoots, err := filepath.Glob(filepath.Join(lswsRoot, "lsphp*", "etc", "php"))
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeConfig, "failed to discover LiteSpeed php.ini roots", err)
+	}
+	for _, root := range phpRoots {
+		walkErr := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if d.IsDir() {
+				return nil
+			}
+			if strings.EqualFold(d.Name(), "php.ini") {
+				matches[path] = struct{}{}
+			}
+			return nil
+		})
+		if walkErr != nil {
+			return nil, apperr.Wrap(apperr.CodeConfig, "failed while scanning LiteSpeed php.ini files", walkErr)
+		}
+	}
+
+	fallbackPattern := filepath.Join(lswsRoot, "lsphp*", "etc", "php.ini")
+	fallbackPaths, err := filepath.Glob(fallbackPattern)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeConfig, "failed to discover fallback LiteSpeed php.ini files", err)
+	}
+	for _, p := range fallbackPaths {
+		matches[p] = struct{}{}
+	}
+
+	paths := make([]string, 0, len(matches))
+	for p := range matches {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	return paths, nil
+}
+
+func applyPHPINISettingsFile(path string, settings []phpINISetting) error {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeConfig, "failed to read php.ini", err)
+	}
+	content := string(b)
+	changed := false
+	for _, setting := range settings {
+		updated, didChange := upsertINIValue(content, setting.key, setting.value)
+		if didChange {
+			changed = true
+			content = updated
+		}
+	}
+	if !changed {
+		return nil
+	}
+
+	mode := os.FileMode(0o644)
+	if info, statErr := os.Stat(path); statErr == nil {
+		mode = info.Mode().Perm()
+		if mode == 0 {
+			mode = 0o644
+		}
+	}
+	if err := os.WriteFile(path, []byte(content), mode); err != nil {
+		return apperr.Wrap(apperr.CodeConfig, "failed to write php.ini", err)
+	}
+	return nil
+}
+
+func upsertINIValue(content, key, value string) (string, bool) {
+	line := fmt.Sprintf("%s = %s", key, value)
+	pattern := regexp.MustCompile(`(?im)^\s*;?\s*` + regexp.QuoteMeta(key) + `\s*=.*$`)
+	if pattern.MatchString(content) {
+		updated := pattern.ReplaceAllString(content, line)
+		return updated, updated != content
+	}
+
+	trimmed := strings.TrimRight(content, "\n")
+	if trimmed == "" {
+		return line + "\n", true
+	}
+	return trimmed + "\n" + line + "\n", true
 }
 
 func (s SiteService) configureLiteSpeedRepo(ctx context.Context, info platform.Info) error {
