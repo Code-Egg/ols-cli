@@ -24,6 +24,10 @@ type StyledConsole struct {
 	errorStyle   lipgloss.Style
 	successStyle lipgloss.Style
 	bulletStyle  lipgloss.Style
+	okBadge      lipgloss.Style
+	warnBadge    lipgloss.Style
+	errorBadge   lipgloss.Style
+	infoBadge    lipgloss.Style
 }
 
 func NewStyledConsole(out io.Writer) StyledConsole {
@@ -35,6 +39,10 @@ func NewStyledConsole(out io.Writer) StyledConsole {
 		errorStyle:   lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true),
 		successStyle: lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Bold(true),
 		bulletStyle:  lipgloss.NewStyle().Foreground(lipgloss.Color("69")).Bold(true),
+		okBadge:      lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Bold(true),
+		warnBadge:    lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true),
+		errorBadge:   lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true),
+		infoBadge:    lipgloss.NewStyle().Foreground(lipgloss.Color("63")).Bold(true),
 	}
 }
 
@@ -43,19 +51,19 @@ func (c StyledConsole) Section(title string) {
 }
 
 func (c StyledConsole) Info(message string) {
-	fmt.Fprintln(c.out, c.infoStyle.Render("ℹ "+message))
+	fmt.Fprintln(c.out, c.infoStyle.Render(message)+" "+c.infoBadge.Render("[INFO]"))
 }
 
 func (c StyledConsole) Warn(message string) {
-	fmt.Fprintln(c.out, c.warnStyle.Render("⚠ "+message))
+	fmt.Fprintln(c.out, c.warnStyle.Render(message)+" "+c.warnBadge.Render("[WARN]"))
 }
 
 func (c StyledConsole) Error(message string) {
-	fmt.Fprintln(c.out, c.errorStyle.Render("✖ "+message))
+	fmt.Fprintln(c.out, c.errorStyle.Render(message)+" "+c.errorBadge.Render("[FAIL]"))
 }
 
 func (c StyledConsole) Success(message string) {
-	fmt.Fprintln(c.out, c.successStyle.Render("✔ "+message))
+	fmt.Fprintln(c.out, c.successStyle.Render(message)+" "+c.okBadge.Render("[OK]"))
 }
 
 func (c StyledConsole) Bullet(message string) {

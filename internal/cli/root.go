@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/ols/ols-cli/internal/apperr"
 	"github.com/ols/ols-cli/internal/platform"
@@ -18,6 +19,8 @@ type rootOptions struct {
 }
 
 func NewRootCmd() *cobra.Command {
+	cobra.EnableCommandSorting = false
+
 	opts := &rootOptions{}
 	console := ui.NewStyledConsole(os.Stdout)
 	detector := platform.NewOSReleaseDetector("")
@@ -41,6 +44,7 @@ func NewRootCmd() *cobra.Command {
 		},
 	}
 
+	cmd.CompletionOptions.DisableDefaultCmd = true
 	cmd.PersistentFlags().BoolVar(&opts.DryRun, "dry-run", false, "print planned operations without changing the system")
 	cmd.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
 		return apperr.Wrap(apperr.CodeValidation, "invalid command options", err)
@@ -48,6 +52,8 @@ func NewRootCmd() *cobra.Command {
 
 	cmd.AddCommand(newInstallCmd(svc, opts))
 	cmd.AddCommand(newSiteCmd(svc, opts))
+	cmd.SetHelpCommand(newRootHelpCmd(cmd))
+	applyColorHelpTemplate(cmd)
 	return wrapErrors(cmd)
 }
 
@@ -85,4 +91,49 @@ func renderError(err error) error {
 		return fmt.Errorf("%s", appErr.Error())
 	}
 	return apperr.Wrap(apperr.CodeInternal, "unexpected failure", err)
+}
+
+func applyColorHelpTemplate(cmd *cobra.Command) {
+	colored := colorizeHelpTemplate(cmd.HelpTemplate())
+	cmd.SetHelpTemplate(colored)
+	for _, c := range cmd.Commands() {
+		applyColorHelpTemplate(c)
+	}
+}
+
+func colorizeHelpTemplate(template string) string {
+	const (
+		boldCyan  = "\x1b[1;36m"
+		boldGreen = "\x1b[1;32m"
+		boldBlue  = "\x1b[1;34m"
+		reset     = "\x1b[0m"
+	)
+	return strings.NewReplacer(
+		"Usage:", boldCyan+"Usage:"+reset,
+		"Available Commands:", boldGreen+"Available Commands:"+reset,
+		"Flags:", boldBlue+"Flags:"+reset,
+		"Global Flags:", boldBlue+"Global Flags:"+reset,
+		"Examples:", boldCyan+"Examples:"+reset,
+	).Replace(template)
+}
+
+func newRootHelpCmd(root *cobra.Command) *cobra.Command {
+	return &cobra.Command{
+		Use:   "help [command]",
+		Short: "Help about any command",
+		Long:  "Help provides help for any command in the application.",
+		Args:  cobra.MaximumNArgs(1),
+		Run: func(_ *cobra.Command, args []string) {
+			if len(args) == 0 {
+				_ = root.Help()
+				return
+			}
+			target, _, err := root.Find(args)
+			if err != nil || target == nil {
+				_ = root.Help()
+				return
+			}
+			_ = target.Help()
+		},
+	}
 }

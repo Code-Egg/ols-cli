@@ -12,6 +12,7 @@ import (
 type siteManager interface {
 	CreateSite(ctx context.Context, opts service.CreateSiteOptions) error
 	UpdateSitePHP(ctx context.Context, opts service.UpdateSiteOptions) error
+	DeleteSite(ctx context.Context, opts service.DeleteSiteOptions) error
 }
 
 type phpFlags struct {
@@ -72,6 +73,7 @@ func newSiteCmd(svc siteManager, rootOpts *rootOptions) *cobra.Command {
 
 	siteCmd.AddCommand(newSiteCreateCmd(svc, rootOpts))
 	siteCmd.AddCommand(newSiteUpdateCmd(svc, rootOpts))
+	siteCmd.AddCommand(newSiteDeleteCmd(svc, rootOpts))
 	return siteCmd
 }
 
@@ -146,5 +148,32 @@ func newSiteUpdateCmd(svc siteManager, rootOpts *rootOptions) *cobra.Command {
 
 	cmd.Flags().BoolVar(&withWordPress, "wp", false, "ensure WordPress and LiteSpeed Cache plugin are present")
 	addPHPVersionFlags(cmd, php)
+	return cmd
+}
+
+func newSiteDeleteCmd(svc siteManager, rootOpts *rootOptions) *cobra.Command {
+	var keepDatabase bool
+
+	cmd := &cobra.Command{
+		Use:   "delete <domain>",
+		Short: "Delete site config, document root, and database",
+		Example: "ols site delete example.com\n" +
+			"ols --dry-run site delete example.com\n" +
+			"ols site delete example.com --keep-db",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			err := svc.DeleteSite(cmd.Context(), service.DeleteSiteOptions{
+				Domain:       args[0],
+				DropDatabase: !keepDatabase,
+				DryRun:       rootOpts.DryRun,
+			})
+			if err != nil {
+				return fmt.Errorf("site delete failed: %w", err)
+			}
+			return nil
+		},
+	}
+
+	cmd.Flags().BoolVar(&keepDatabase, "keep-db", false, "keep WordPress database and DB user")
 	return cmd
 }
