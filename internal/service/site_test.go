@@ -399,3 +399,118 @@ func TestApplyPHPINISettingsFile(t *testing.T) {
 		}
 	}
 }
+
+func TestApplyVHostSSLCertificateAppendsBlock(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "vhconf.conf")
+	initial := buildVHConfig("85")
+	if err := os.WriteFile(p, []byte(initial), 0o644); err != nil {
+		t.Fatalf("write initial vhconf: %v", err)
+	}
+
+	err := applyVHostSSLCertificate(p, "/etc/letsencrypt/live/example.com/fullchain.pem", "/etc/letsencrypt/live/example.com/privkey.pem")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatalf("read vhconf: %v", err)
+	}
+	content := string(b)
+	if !strings.Contains(content, "vhssl  {") {
+		t.Fatalf("expected vhssl block, got: %s", content)
+	}
+	if !strings.Contains(content, "certFile") || !strings.Contains(content, "fullchain.pem") {
+		t.Fatalf("expected certFile directive, got: %s", content)
+	}
+	if !strings.Contains(content, "keyFile") || !strings.Contains(content, "privkey.pem") {
+		t.Fatalf("expected keyFile directive, got: %s", content)
+	}
+}
+
+func TestApplyVHostSSLCertificateUpdatesExistingBlock(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "vhconf.conf")
+	initial := strings.Join([]string{
+		"docRoot                   $VH_ROOT/html/",
+		"",
+		"vhssl  {",
+		"  keyFile                 /tmp/old.key",
+		"  certFile                /tmp/old.crt",
+		"}",
+		"",
+	}, "\n")
+	if err := os.WriteFile(p, []byte(initial), 0o644); err != nil {
+		t.Fatalf("write initial vhconf: %v", err)
+	}
+
+	err := applyVHostSSLCertificate(p, "/etc/letsencrypt/live/example.com/fullchain.pem", "/etc/letsencrypt/live/example.com/privkey.pem")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatalf("read vhconf: %v", err)
+	}
+	content := string(b)
+	if strings.Contains(content, "/tmp/old.key") || strings.Contains(content, "/tmp/old.crt") {
+		t.Fatalf("expected old cert paths replaced, got: %s", content)
+	}
+	if !strings.Contains(content, "fullchain.pem") || !strings.Contains(content, "privkey.pem") {
+		t.Fatalf("expected new cert paths present, got: %s", content)
+	}
+}
+
+func TestIssueLetsEncryptCertificateSuccess(t *testing.T) {
+	var out bytes.Buffer
+	console := ui.NewStyledConsole(&out)
+	r := &fakeRunner{}
+	svc := NewSiteService(
+		fakeDetector{info: platform.Info{ID: "ubuntu", Family: platform.FamilyDebian, PackageManager: platform.PackageManagerAPT, VersionID: "24.04"}},
+		r,
+		console,
+	)
+
+	oldRoot := letsencryptLiveRoot
+	letsencryptLiveRoot = filepath.Join(t.TempDir(), "letsencrypt", "live")
+	t.Cleanup(func() { letsencryptLiveRoot = oldRoot })
+
+	certFile, keyFile := letsEncryptCertPaths("example.com")
+	if err := os.MkdirAll(filepath.Dir(certFile), 0o755); err != nil {
+		t.Fatalf("mkdir cert dir: %v", err)
+	}
+	if err := os.WriteFile(certFile, []byte("cert"), 0o644); err != nil {
+		t.Fatalf("write cert file: %v", err)
+	}
+	if err := os.WriteFile(keyFile, []byte("key"), 0o600); err != nil {
+		t.Fatalf("write key file: %v", err)
+	}
+
+	gotCert, gotKey, err := svc.issueLetsEncryptCertificate(context.Background(), platform.Info{PackageManager: platform.PackageManagerAPT}, "example.com", "/var/www/example.com/html")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotCert != certFile || gotKey != keyFile {
+		t.Fatalf("unexpected cert paths: cert=%s key=%s", gotCert, gotKey)
+	}
+
+	hasCertbot := false
+	for _, call := range r.calls {
+		if len(call) > 0 && call[0] == "certbot" {
+			hasCertbot = true
+			break
+		}
+	}
+	if !hasCertbot {
+		t.Fatalf("expected certbot to be called, got calls: %#v", r.calls)
+	}
+}
+
+func TestCertbotPackagesFor(t *testing.T) {
+	if len(certbotPackagesFor(platform.PackageManagerAPT)) == 0 {
+		t.Fatal("expected certbot package for apt")
+	}
+	if got := certbotPackagesFor(platform.PackageManager("unknown")); len(got) != 0 {
+		t.Fatalf("expected no package for unknown package manager, got: %v", got)
+	}
+}

@@ -31,6 +31,7 @@ var (
 	lsphpNamePattern    = regexp.MustCompile(`lsphp[0-9]{2}`)
 	nonAlphaNumPattern  = regexp.MustCompile(`[^a-z0-9]+`)
 	multiUnderscoreExpr = regexp.MustCompile(`_+`)
+	letsencryptLiveRoot = "/etc/letsencrypt/live"
 )
 
 const (
@@ -241,6 +242,9 @@ func (s SiteService) CreateSite(ctx context.Context, opts CreateSiteOptions) err
 		}
 		if opts.WithLE {
 			s.console.Bullet("perform domain reachability precheck for Let's Encrypt")
+			s.console.Bullet("ensure certbot is installed")
+			s.console.Bullet("issue Let's Encrypt certificate via certbot webroot challenge")
+			s.console.Bullet("write cert/key into vhost SSL config")
 		}
 		s.console.Bullet("reload OpenLiteSpeed")
 		s.console.Success("Dry-run plan generated")
@@ -298,12 +302,26 @@ func (s SiteService) CreateSite(ctx context.Context, opts CreateSiteOptions) err
 	}
 
 	if opts.WithLE {
-		if ok, detail := precheckLEDomainReachability(opts.Domain); ok {
-			s.console.Success("Let's Encrypt precheck passed: domain is reachable over HTTP")
-		} else {
-			s.console.Warn("Let's Encrypt precheck failed: " + detail)
+		ok, detail := precheckLEDomainReachability(opts.Domain)
+		if !ok {
+			return apperr.New(apperr.CodeValidation, "Let's Encrypt precheck failed: "+detail)
 		}
-		s.console.Warn("SSL issuance is not yet automated; run certbot and wire SSL listener manually")
+		s.console.Success("Let's Encrypt precheck passed: domain is reachable over HTTP")
+
+		certFile, keyFile, err := s.issueLetsEncryptCertificate(ctx, info, opts.Domain, docRoot)
+		if err != nil {
+			return err
+		}
+		if err := applyVHostSSLCertificate(vhostConfig, certFile, keyFile); err != nil {
+			return err
+		}
+		s.console.Success("Let's Encrypt certificate issued")
+		s.console.Bullet("Certificate: " + certFile)
+		s.console.Bullet("Private key: " + keyFile)
+
+		if err := s.reloadOpenLiteSpeed(ctx); err != nil {
+			s.console.Warn("Failed to reload OpenLiteSpeed automatically after SSL issuance: " + err.Error())
+		}
 	}
 
 	s.console.Success("Virtual host files created")
@@ -904,6 +922,154 @@ func precheckLEDomainReachability(domain string) (bool, string) {
 	}
 
 	return true, fmt.Sprintf("http %d", resp.StatusCode)
+}
+
+func letsEncryptCertPaths(domain string) (string, string) {
+	liveDir := path.Join(letsencryptLiveRoot, strings.TrimSpace(strings.ToLower(domain)))
+	return path.Join(liveDir, "fullchain.pem"), path.Join(liveDir, "privkey.pem")
+}
+
+func certbotPackagesFor(pm platform.PackageManager) []string {
+	switch pm {
+	case platform.PackageManagerAPT, platform.PackageManagerYUM, platform.PackageManagerDNF:
+		return []string{"certbot"}
+	default:
+		return nil
+	}
+}
+
+func (s SiteService) ensureCertbotAvailable(ctx context.Context, info platform.Info) error {
+	if _, err := s.runner.Run(ctx, "sh", "-c", "command -v certbot >/dev/null 2>&1"); err == nil {
+		return nil
+	}
+
+	pkgs := certbotPackagesFor(info.PackageManager)
+	if len(pkgs) == 0 {
+		return apperr.New(apperr.CodePlatform, fmt.Sprintf("certbot auto-install is unsupported for package manager %s", info.PackageManager))
+	}
+
+	s.console.Bullet("Installing certbot package")
+	installer := platform.NewPackageInstaller(s.runner, info)
+	if err := installer.Install(ctx, pkgs...); err != nil {
+		return apperr.Wrap(apperr.CodeCommand, "failed to install certbot", err)
+	}
+
+	if _, err := s.runner.Run(ctx, "sh", "-c", "command -v certbot >/dev/null 2>&1"); err != nil {
+		return apperr.New(apperr.CodeCommand, "certbot installation completed but executable was not found in PATH")
+	}
+	return nil
+}
+
+func (s SiteService) issueLetsEncryptCertificate(ctx context.Context, info platform.Info, domain, webRoot string) (string, string, error) {
+	if err := s.ensureCertbotAvailable(ctx, info); err != nil {
+		return "", "", err
+	}
+
+	res, err := s.runner.Run(
+		ctx,
+		"certbot",
+		"certonly",
+		"--non-interactive",
+		"--agree-tos",
+		"--register-unsafely-without-email",
+		"--keep-until-expiring",
+		"--webroot",
+		"-w", webRoot,
+		"-d", domain,
+	)
+	if err != nil {
+		detail := strings.TrimSpace(strings.Join([]string{res.Stdout, res.Stderr}, "\n"))
+		if detail != "" {
+			return "", "", apperr.Wrap(apperr.CodeCommand, "certbot certificate issuance failed: "+detail, err)
+		}
+		return "", "", apperr.Wrap(apperr.CodeCommand, "certbot certificate issuance failed", err)
+	}
+
+	certFile, keyFile := letsEncryptCertPaths(domain)
+	if !fileExists(certFile) || !fileExists(keyFile) {
+		return "", "", apperr.New(
+			apperr.CodeCommand,
+			fmt.Sprintf("certbot completed but expected certificate files were not found (cert=%s key=%s)", certFile, keyFile),
+		)
+	}
+
+	return certFile, keyFile, nil
+}
+
+func findBlockByKey(lines []string, key string) (int, int) {
+	start := -1
+	depth := 0
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if start == -1 {
+			if !strings.HasPrefix(trimmed, key+" ") || !strings.Contains(trimmed, "{") {
+				continue
+			}
+			start = i
+			depth = strings.Count(line, "{") - strings.Count(line, "}")
+			if depth <= 0 {
+				depth = 1
+			}
+			continue
+		}
+
+		depth += strings.Count(line, "{")
+		depth -= strings.Count(line, "}")
+		if depth == 0 {
+			return start, i
+		}
+	}
+	return -1, -1
+}
+
+func applyVHostSSLCertificate(vhostConfigPath, certFile, keyFile string) error {
+	b, err := os.ReadFile(vhostConfigPath)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeConfig, "failed to read vhost config for SSL update", err)
+	}
+	cfg := string(b)
+	lines := strings.Split(cfg, "\n")
+
+	start, end := findBlockByKey(lines, "vhssl")
+	if start < 0 || end < 0 {
+		block := strings.Join([]string{
+			"vhssl  {",
+			formatDirectiveLine("  ", "keyFile", keyFile),
+			formatDirectiveLine("  ", "certFile", certFile),
+			"}",
+		}, "\n")
+		updated := strings.TrimRight(cfg, "\n")
+		if updated != "" {
+			updated += "\n\n"
+		}
+		updated += block + "\n"
+		if err := os.WriteFile(vhostConfigPath, []byte(updated), 0o644); err != nil {
+			return apperr.Wrap(apperr.CodeConfig, "failed to write vhost SSL config", err)
+		}
+		return nil
+	}
+
+	body := append([]string{}, lines[start+1:end]...)
+	changed := false
+	body, changedKey := upsertDirective(body, "keyFile", keyFile)
+	changed = changed || changedKey
+	body, changedCert := upsertDirective(body, "certFile", certFile)
+	changed = changed || changedCert
+	if !changed {
+		return nil
+	}
+
+	newBlock := []string{lines[start]}
+	newBlock = append(newBlock, body...)
+	newBlock = append(newBlock, lines[end])
+
+	updatedLines := append([]string{}, lines[:start]...)
+	updatedLines = append(updatedLines, newBlock...)
+	updatedLines = append(updatedLines, lines[end+1:]...)
+	if err := os.WriteFile(vhostConfigPath, []byte(strings.Join(updatedLines, "\n")), 0o644); err != nil {
+		return apperr.Wrap(apperr.CodeConfig, "failed to write vhost SSL config", err)
+	}
+	return nil
 }
 
 func (s SiteService) ensureRuntimeInstalled(phpVersion string) error {
