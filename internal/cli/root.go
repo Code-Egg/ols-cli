@@ -105,13 +105,21 @@ func configureColorOutput(mode string) error {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
 	case "", "always":
 		_ = os.Unsetenv("NO_COLOR")
+		_ = os.Setenv("CLICOLOR", "1")
 		_ = os.Setenv("CLICOLOR_FORCE", "1")
+		if strings.TrimSpace(os.Getenv("TERM")) == "" {
+			_ = os.Setenv("TERM", "xterm-256color")
+		}
 		lipgloss.SetColorProfile(termenv.TrueColor)
 		return nil
 	case "auto":
+		_ = os.Unsetenv("CLICOLOR_FORCE")
 		lipgloss.SetColorProfile(termenv.ColorProfile())
 		return nil
 	case "never":
+		_ = os.Setenv("NO_COLOR", "1")
+		_ = os.Setenv("CLICOLOR", "0")
+		_ = os.Unsetenv("CLICOLOR_FORCE")
 		lipgloss.SetColorProfile(termenv.Ascii)
 		return nil
 	default:
