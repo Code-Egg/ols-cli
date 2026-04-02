@@ -205,6 +205,7 @@ func (s SiteService) CreateSite(ctx context.Context, opts CreateSiteOptions) err
 			s.console.Bullet("create WordPress database and database user")
 			s.console.Bullet("generate and print WordPress admin credentials")
 			s.console.Bullet("finish WordPress installation via wp-cli")
+			s.console.Bullet("force WordPress home/siteurl to canonical domain URL")
 		} else {
 			s.console.Bullet("write starter index.php into " + docRoot)
 		}
@@ -819,10 +820,11 @@ func (s SiteService) provisionWordPressInstall(ctx context.Context, domain, docR
 
 	adminUser := "admin"
 	adminEmail := "admin@" + domain
+	installURL := wordPressBaseURL(domain)
 	if err := s.runWPCLI(ctx, phpPath, wpCLIPath,
 		"core", "install",
 		"--path="+docRoot,
-		"--url=http://"+domain,
+		"--url="+installURL,
 		"--title="+domain,
 		"--admin_user="+adminUser,
 		"--admin_password="+adminPassword,
@@ -830,6 +832,9 @@ func (s SiteService) provisionWordPressInstall(ctx context.Context, domain, docR
 		"--skip-email",
 		"--allow-root",
 	); err != nil {
+		return nil, err
+	}
+	if err := s.ensureWordPressURLs(ctx, phpPath, wpCLIPath, docRoot, installURL); err != nil {
 		return nil, err
 	}
 
@@ -847,11 +852,29 @@ func (s SiteService) provisionWordPressInstall(ctx context.Context, domain, docR
 	}
 
 	return &wpAdminAccess{
-		AdminURL:      "http://" + domain + "/wp-admin",
+		AdminURL:      installURL + "/wp-admin",
 		AdminUser:     adminUser,
 		AdminPassword: adminPassword,
 		SecretsFile:   secretsPath,
 	}, nil
+}
+
+func (s SiteService) ensureWordPressURLs(ctx context.Context, phpPath, wpCLIPath, docRoot, baseURL string) error {
+	updates := [][]string{
+		{"option", "update", "home", baseURL},
+		{"option", "update", "siteurl", baseURL},
+	}
+	for _, update := range updates {
+		args := append(update, "--path="+docRoot, "--allow-root")
+		if err := s.runWPCLI(ctx, phpPath, wpCLIPath, args...); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func wordPressBaseURL(domain string) string {
+	return "http://" + strings.TrimSpace(strings.ToLower(domain))
 }
 
 func (s SiteService) createWordPressDatabase(ctx context.Context, dbName, dbUser, dbPassword string) error {
