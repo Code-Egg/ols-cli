@@ -6,6 +6,8 @@ import (
 	"os"
 	"strings"
 
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 	"github.com/ols/ols-cli/internal/apperr"
 	"github.com/ols/ols-cli/internal/platform"
 	"github.com/ols/ols-cli/internal/runner"
@@ -16,12 +18,14 @@ import (
 
 type rootOptions struct {
 	DryRun bool
+	Color  string
 }
 
 func NewRootCmd() *cobra.Command {
 	cobra.EnableCommandSorting = false
 
-	opts := &rootOptions{}
+	opts := &rootOptions{Color: "always"}
+	_ = configureColorOutput(opts.Color)
 	console := ui.NewStyledConsole(os.Stdout)
 	detector := platform.NewOSReleaseDetector("")
 	run := runner.NewExecRunner()
@@ -37,6 +41,9 @@ func NewRootCmd() *cobra.Command {
 			return c.Help()
 		},
 		PersistentPreRunE: func(_ *cobra.Command, _ []string) error {
+			if err := configureColorOutput(opts.Color); err != nil {
+				return err
+			}
 			if !hasRootPrivileges() && !opts.DryRun {
 				return apperr.New(apperr.CodeValidation, "root privileges are required (use sudo), or pass --dry-run")
 			}
@@ -46,6 +53,7 @@ func NewRootCmd() *cobra.Command {
 
 	cmd.CompletionOptions.DisableDefaultCmd = true
 	cmd.PersistentFlags().BoolVar(&opts.DryRun, "dry-run", false, "print planned operations without changing the system")
+	cmd.PersistentFlags().StringVar(&opts.Color, "color", "always", "color mode: always, auto, never")
 	cmd.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
 		return apperr.Wrap(apperr.CodeValidation, "invalid command options", err)
 	})
@@ -91,6 +99,24 @@ func renderError(err error) error {
 		return fmt.Errorf("%s", appErr.Error())
 	}
 	return apperr.Wrap(apperr.CodeInternal, "unexpected failure", err)
+}
+
+func configureColorOutput(mode string) error {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "", "always":
+		_ = os.Unsetenv("NO_COLOR")
+		_ = os.Setenv("CLICOLOR_FORCE", "1")
+		lipgloss.SetColorProfile(termenv.TrueColor)
+		return nil
+	case "auto":
+		lipgloss.SetColorProfile(termenv.ColorProfile())
+		return nil
+	case "never":
+		lipgloss.SetColorProfile(termenv.Ascii)
+		return nil
+	default:
+		return apperr.New(apperr.CodeValidation, "invalid --color value; allowed: always, auto, never")
+	}
 }
 
 func applyColorHelpTemplate(cmd *cobra.Command) {

@@ -52,6 +52,18 @@ wget https://github.com/Code-Egg/ols-cli/releases/download/v0.1.1/checksums.txt
 sha256sum /usr/local/bin/ols
 ```
 
+If colors do not appear in your terminal, force them explicitly:
+
+```bash
+ols --color=always --help
+```
+
+You can also disable colors when needed:
+
+```bash
+ols --color=never --help
+```
+
 ### 2) Bash bootstrap installer
 
 ```bash
