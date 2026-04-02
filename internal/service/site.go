@@ -261,6 +261,9 @@ func (s SiteService) CreateSite(ctx context.Context, opts CreateSiteOptions) err
 	if err := s.registerDomainInServerConfig(opts.Domain, siteRoot, vhostConfig, serverConfigPath); err != nil {
 		return err
 	}
+	if err := s.reloadOpenLiteSpeed(ctx); err != nil {
+		s.console.Warn("Failed to reload OpenLiteSpeed automatically: " + err.Error())
+	}
 
 	if opts.WithLE {
 		if ok, detail := precheckLEDomainReachability(opts.Domain); ok {
@@ -283,7 +286,6 @@ func (s SiteService) CreateSite(ctx context.Context, opts CreateSiteOptions) err
 		s.console.Bullet("Admin Password: " + wpAccess.AdminPassword)
 		s.console.Bullet("Secrets file: " + wpAccess.SecretsFile)
 	}
-	s.console.Warn("Review listener mapping in OpenLiteSpeed WebAdmin and reload OLS")
 	return nil
 }
 
@@ -605,6 +607,25 @@ func (s SiteService) ensureRuntimeInstalled(phpVersion string) error {
 	}
 
 	return nil
+}
+
+func (s SiteService) reloadOpenLiteSpeed(ctx context.Context) error {
+	lswsCtrlPath := filepath.Join(s.lswsRoot, "bin", "lswsctrl")
+	if !fileExists(lswsCtrlPath) {
+		return apperr.New(apperr.CodeValidation, "lswsctrl not found; cannot reload OpenLiteSpeed")
+	}
+
+	if _, err := s.runner.Run(ctx, lswsCtrlPath, "reload"); err == nil {
+		s.console.Bullet("OpenLiteSpeed reloaded: " + lswsCtrlPath + " reload")
+		return nil
+	}
+
+	if _, err := s.runner.Run(ctx, lswsCtrlPath, "restart"); err == nil {
+		s.console.Bullet("OpenLiteSpeed restarted: " + lswsCtrlPath + " restart")
+		return nil
+	}
+
+	return apperr.New(apperr.CodeCommand, "lswsctrl reload/restart failed")
 }
 
 func fileExists(p string) bool {

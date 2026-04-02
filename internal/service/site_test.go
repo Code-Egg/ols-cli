@@ -23,11 +23,17 @@ func (f fakeDetector) Detect(_ context.Context) (platform.Info, error) {
 }
 
 type fakeRunner struct {
-	calls [][]string
+	calls    [][]string
+	failures map[string]error
 }
 
 func (f *fakeRunner) Run(_ context.Context, name string, args ...string) (runner.Result, error) {
 	f.calls = append(f.calls, append([]string{name}, args...))
+	if f.failures != nil {
+		if err, ok := f.failures[name+" "+strings.Join(args, " ")]; ok {
+			return runner.Result{}, err
+		}
+	}
 	return runner.Result{}, nil
 }
 
@@ -172,6 +178,17 @@ func TestCreateSiteCreatesVHostAndDocRoot(t *testing.T) {
 	}
 	if !strings.Contains(cfgS, "map                     example.com example.com") {
 		t.Fatalf("expected listener map in server config: %s", cfgS)
+	}
+
+	reloadCalled := false
+	for _, call := range r.calls {
+		if len(call) == 2 && filepath.Base(call[0]) == "lswsctrl" && call[1] == "reload" {
+			reloadCalled = true
+			break
+		}
+	}
+	if !reloadCalled {
+		t.Fatalf("expected lswsctrl reload command, got calls: %#v", r.calls)
 	}
 }
 
