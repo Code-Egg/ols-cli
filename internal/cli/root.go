@@ -103,17 +103,19 @@ func applyColorHelpTemplate(cmd *cobra.Command) {
 
 func colorizeHelpTemplate(template string) string {
 	const (
-		boldCyan  = "\x1b[1;36m"
-		boldGreen = "\x1b[1;32m"
-		boldBlue  = "\x1b[1;34m"
-		reset     = "\x1b[0m"
+		boldCyan   = "\x1b[1;36m"
+		boldGreen  = "\x1b[1;32m"
+		boldBlue   = "\x1b[1;34m"
+		boldYellow = "\x1b[1;33m"
+		dimWhite   = "\x1b[2;37m"
+		reset      = "\x1b[0m"
 	)
 	return strings.NewReplacer(
-		"Usage:", boldCyan+"Usage:"+reset,
-		"Available Commands:", boldGreen+"Available Commands:"+reset,
-		"Flags:", boldBlue+"Flags:"+reset,
-		"Global Flags:", boldBlue+"Global Flags:"+reset,
-		"Examples:", boldCyan+"Examples:"+reset,
+		"Usage:", "\n"+boldCyan+"USAGE"+reset+"\n"+dimWhite+"─────"+reset,
+		"Available Commands:", "\n"+boldGreen+"AVAILABLE COMMANDS"+reset+"\n"+dimWhite+"──────────────────"+reset,
+		"Flags:", "\n"+boldBlue+"FLAGS"+reset+"\n"+dimWhite+"─────"+reset,
+		"Global Flags:", "\n"+boldBlue+"GLOBAL FLAGS"+reset+"\n"+dimWhite+"────────────"+reset,
+		"Examples:", "\n"+boldYellow+"EXAMPLES"+reset+"\n"+dimWhite+"────────"+reset,
 	).Replace(template)
 }
 

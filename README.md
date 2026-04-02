@@ -27,7 +27,32 @@ If release binaries are published, end users do not need to compile from source.
 
 ## Installation channels
 
-### 1) Bash bootstrap installer
+### 1) Direct binary download (recommended)
+
+Pick the correct architecture (`amd64` or `arm64`) and download directly from GitHub Releases.
+
+```bash
+sudo wget -O /usr/local/bin/ols https://github.com/Code-Egg/ols-cli/releases/download/v0.1.1/ols-linux-amd64
+sudo chmod +x /usr/local/bin/ols
+ols --help
+```
+
+For ARM64 servers:
+
+```bash
+sudo wget -O /usr/local/bin/ols https://github.com/Code-Egg/ols-cli/releases/download/v0.1.1/ols-linux-arm64
+sudo chmod +x /usr/local/bin/ols
+ols --help
+```
+
+Optional checksum verification:
+
+```bash
+wget https://github.com/Code-Egg/ols-cli/releases/download/v0.1.1/checksums.txt
+sha256sum /usr/local/bin/ols
+```
+
+### 2) Bash bootstrap installer
 
 ```bash
 bash ols
@@ -35,7 +60,7 @@ bash ols
 
 The `ols` script calls `scripts/install.sh`, downloads release artifacts, verifies SHA-256 checksums, and installs `ols` to `/usr/local/bin/ols`.
 
-### 2) npm package scaffold
+### 3) npm package scaffold
 
 Directory: `packaging/npm`
 
@@ -43,7 +68,7 @@ Directory: `packaging/npm`
 - `postinstall.js` downloads and verifies Linux binary from GitHub Releases
 - `bin/ols` launches the installed binary
 
-### 3) apt packaging scaffold
+### 4) apt packaging scaffold
 
 Directory: `packaging/apt`
 
@@ -105,6 +130,8 @@ This command now creates:
 - Console output with WordPress admin URL, admin user, and generated admin password when `--wp` is enabled
 - Credential persistence at `/etc/ols-cli/sites/<domain>/credentials.txt` (mode `0600`) when `--wp` is enabled
 - Domain registration into `/usr/local/lsws/conf/httpd_config.conf` (virtualhost + listener maps for `Default` and `SSL` when present)
+- Let's Encrypt certificate issuance through `certbot` (webroot challenge)
+- SSL cert/key wiring into vhost `vhssl` (`certFile` and `keyFile`)
 
 ### Create a site with defaults (WordPress + PHP 8.5)
 
