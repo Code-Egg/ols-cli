@@ -13,6 +13,8 @@ It is currently focused on clear command behavior, predictable output, and safe 
   - `ols install [--php81|--php82|--php83|--php84|--php85] [--database mariadb|mysql|none] [--config /path/install.json]`
   - `ols site create <domain> --wp [--le] [--php81|--php82|--php83|--php84|--php85]`
   - `ols site update <domain> [--wp] --php81|--php82|--php83|--php84|--php85`
+  - `ols site info <domain>`
+  - `ols site list`
 - Structured errors with stable machine-readable codes
 - Styled terminal output for clearer operations
 - Unit tests and CI scaffold
@@ -119,11 +121,25 @@ sudo ols site update example.com --php85
 sudo ols site update example.com --wp --php83
 ```
 
+### Show site information
+
+```bash
+ols site info example.com
+```
+
+### List managed sites
+
+```bash
+ols site list
+```
+
 ### Preview operations without making changes
 
 ```bash
 ols --dry-run site create example.com --wp --le --php85
 ols --dry-run site update example.com --wp --php83
+ols --dry-run site info example.com
+ols --dry-run site list
 ```
 
 ## Development

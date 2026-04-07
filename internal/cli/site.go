@@ -12,6 +12,8 @@ import (
 type siteManager interface {
 	CreateSite(ctx context.Context, opts service.CreateSiteOptions) error
 	UpdateSitePHP(ctx context.Context, opts service.UpdateSiteOptions) error
+	SiteInfo(ctx context.Context, opts service.SiteInfoOptions) error
+	ListSites(ctx context.Context, opts service.ListSitesOptions) error
 	DeleteSite(ctx context.Context, opts service.DeleteSiteOptions) error
 }
 
@@ -73,6 +75,8 @@ func newSiteCmd(svc siteManager, rootOpts *rootOptions) *cobra.Command {
 
 	siteCmd.AddCommand(newSiteCreateCmd(svc, rootOpts))
 	siteCmd.AddCommand(newSiteUpdateCmd(svc, rootOpts))
+	siteCmd.AddCommand(newSiteInfoCmd(svc, rootOpts))
+	siteCmd.AddCommand(newSiteListCmd(svc, rootOpts))
 	siteCmd.AddCommand(newSiteDeleteCmd(svc, rootOpts))
 	return siteCmd
 }
@@ -148,6 +152,43 @@ func newSiteUpdateCmd(svc siteManager, rootOpts *rootOptions) *cobra.Command {
 
 	cmd.Flags().BoolVar(&withWordPress, "wp", false, "ensure WordPress and LiteSpeed Cache plugin are present")
 	addPHPVersionFlags(cmd, php)
+	return cmd
+}
+
+func newSiteInfoCmd(svc siteManager, rootOpts *rootOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:     "info <domain>",
+		Short:   "Show site information",
+		Example: "ols site info example.com",
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			err := svc.SiteInfo(cmd.Context(), service.SiteInfoOptions{
+				Domain: args[0],
+				DryRun: rootOpts.DryRun,
+			})
+			if err != nil {
+				return fmt.Errorf("site info failed: %w", err)
+			}
+			return nil
+		},
+	}
+	return cmd
+}
+
+func newSiteListCmd(svc siteManager, rootOpts *rootOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:     "list",
+		Short:   "List all configured sites",
+		Example: "ols site list",
+		Args:    cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			err := svc.ListSites(cmd.Context(), service.ListSitesOptions{DryRun: rootOpts.DryRun})
+			if err != nil {
+				return fmt.Errorf("site list failed: %w", err)
+			}
+			return nil
+		},
+	}
 	return cmd
 }
 

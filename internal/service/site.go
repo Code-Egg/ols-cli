@@ -111,6 +111,15 @@ type DeleteSiteOptions struct {
 	DryRun       bool
 }
 
+type SiteInfoOptions struct {
+	Domain string
+	DryRun bool
+}
+
+type ListSitesOptions struct {
+	DryRun bool
+}
+
 func (s SiteService) InstallRuntime(ctx context.Context, opts InstallOptions) error {
 	info, err := s.detector.Detect(ctx)
 	if err != nil {
@@ -475,6 +484,162 @@ func (s SiteService) DeleteSite(ctx context.Context, opts DeleteSiteOptions) err
 	s.console.Bullet("Removed site root: " + siteRoot)
 	s.console.Bullet("Server config updated: " + serverConfigPath)
 	return nil
+}
+
+func (s SiteService) SiteInfo(_ context.Context, opts SiteInfoOptions) error {
+	if err := ValidateDomain(opts.Domain); err != nil {
+		return err
+	}
+
+	domain := strings.ToLower(strings.TrimSpace(opts.Domain))
+	siteRoot := filepath.Join(s.webRoot, domain)
+	docRoot := filepath.Join(siteRoot, "html")
+	vhostDir := filepath.Join(s.lswsRoot, "conf", "vhosts", domain)
+	vhostConfig := filepath.Join(vhostDir, "vhconf.conf")
+	vhostDefinition := filepath.Join(vhostDir, "vhost.conf")
+	serverConfigPath := filepath.Join(s.lswsRoot, "conf", "httpd_config.conf")
+	secretsPath := filepath.Join(defaultSecretsRoot, domain, "credentials.txt")
+
+	if !fileExists(vhostConfig) && !fileExists(vhostDefinition) && !fileExists(docRoot) {
+		return apperr.New(apperr.CodeValidation, fmt.Sprintf("site %s not found", domain))
+	}
+
+	if opts.DryRun {
+		s.console.Warn("Dry-run flag has no side effects for read-only info output")
+	}
+
+	phpVersion := "unknown"
+	sslEnabled := false
+	certFile := ""
+	keyFile := ""
+	if b, err := os.ReadFile(vhostConfig); err == nil {
+		cfg := string(b)
+		if token := lsphpNamePattern.FindString(cfg); token != "" {
+			phpVersion = strings.TrimPrefix(token, "lsphp")
+		}
+		sslEnabled = strings.Contains(cfg, "vhssl")
+		certFile = firstDirectiveValue(cfg, "certFile")
+		keyFile = firstDirectiveValue(cfg, "keyFile")
+	}
+
+	serverMapped := false
+	if b, err := os.ReadFile(serverConfigPath); err == nil {
+		cfg := string(b)
+		serverMapped = strings.Contains(strings.ToLower(cfg), strings.ToLower("virtualhost "+domain+" {")) || hasDomainMapLine(cfg, domain)
+	}
+
+	wpDetected := looksLikeWordPressDocRoot(docRoot)
+	secrets := readSecretsFile(secretsPath)
+	dbName := secrets["DB_NAME"]
+	dbUser := secrets["DB_USER"]
+
+	s.console.Section("Site info")
+	s.console.Bullet("Domain: " + domain)
+	s.console.Bullet("Document root: " + docRoot)
+	s.console.Bullet("VHost config: " + vhostConfig)
+	s.console.Bullet("VHost definition: " + vhostDefinition)
+	s.console.Bullet("Server mapping: " + yesNo(serverMapped))
+	if phpVersion == "unknown" {
+		s.console.Bullet("PHP version: unknown")
+	} else {
+		s.console.Bullet("PHP version: lsphp" + phpVersion)
+	}
+	s.console.Bullet("WordPress detected: " + yesNo(wpDetected))
+	s.console.Bullet("SSL enabled: " + yesNo(sslEnabled))
+	if certFile != "" {
+		s.console.Bullet("SSL certFile: " + certFile)
+	}
+	if keyFile != "" {
+		s.console.Bullet("SSL keyFile: " + keyFile)
+	}
+	if dbName != "" {
+		s.console.Bullet("Database name: " + dbName)
+	}
+	if dbUser != "" {
+		s.console.Bullet("Database user: " + dbUser)
+	}
+
+	return nil
+}
+
+func (s SiteService) ListSites(_ context.Context, opts ListSitesOptions) error {
+	vhostRoot := filepath.Join(s.lswsRoot, "conf", "vhosts")
+	entries, err := os.ReadDir(vhostRoot)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeConfig, "failed to read OpenLiteSpeed vhost directory", err)
+	}
+
+	if opts.DryRun {
+		s.console.Warn("Dry-run flag has no side effects for read-only list output")
+	}
+
+	domains := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		domain := strings.TrimSpace(entry.Name())
+		if domain == "" {
+			continue
+		}
+		if !fileExists(filepath.Join(vhostRoot, domain, "vhconf.conf")) {
+			continue
+		}
+		domains = append(domains, domain)
+	}
+
+	sort.Strings(domains)
+
+	s.console.Section("Site list")
+	s.console.Bullet("VHost root: " + vhostRoot)
+	if len(domains) == 0 {
+		s.console.Warn("No managed sites found")
+		return nil
+	}
+
+	for _, domain := range domains {
+		docRoot := filepath.Join(s.webRoot, domain, "html")
+		wpTag := ""
+		if looksLikeWordPressDocRoot(docRoot) {
+			wpTag = " [wp]"
+		}
+		s.console.Bullet(domain + wpTag)
+	}
+
+	s.console.Success(fmt.Sprintf("Found %d site(s)", len(domains)))
+	return nil
+}
+
+func readSecretsFile(path string) map[string]string {
+	result := map[string]string{}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return result
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		val := strings.TrimSpace(parts[1])
+		if key == "" {
+			continue
+		}
+		result[key] = val
+	}
+	return result
+}
+
+func yesNo(ok bool) string {
+	if ok {
+		return "yes"
+	}
+	return "no"
 }
 
 func (s SiteService) applyDefaultPHPINISettings() error {
