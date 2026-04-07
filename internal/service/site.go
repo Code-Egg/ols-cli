@@ -216,6 +216,7 @@ func (s SiteService) CreateSite(ctx context.Context, opts CreateSiteOptions) err
 	vhostConfig := filepath.Join(vhostDir, "vhconf.conf")
 	vhostDefinition := filepath.Join(vhostDir, "vhost.conf")
 	serverConfigPath := filepath.Join(s.lswsRoot, "conf", "httpd_config.conf")
+	siteURL := wordPressBaseURL(opts.Domain, opts.WithLE)
 	var wpAccess *wpAdminAccess
 
 	s.console.Section("Create site")
@@ -249,7 +250,7 @@ func (s SiteService) CreateSite(ctx context.Context, opts CreateSiteOptions) err
 			s.console.Bullet("create WordPress database and database user")
 			s.console.Bullet("generate and print WordPress admin credentials")
 			s.console.Bullet("finish WordPress installation via wp-cli")
-			s.console.Bullet("force WordPress home/siteurl to canonical domain URL")
+			s.console.Bullet("force WordPress home/siteurl to " + siteURL)
 		} else {
 			s.console.Bullet("write starter index.php into " + docRoot)
 		}
@@ -291,7 +292,7 @@ func (s SiteService) CreateSite(ctx context.Context, opts CreateSiteOptions) err
 		if err := ensureWordPressFiles(docRoot); err != nil {
 			return err
 		}
-		installedAccess, err := s.provisionWordPressInstall(ctx, opts.Domain, docRoot, phpVersion)
+		installedAccess, err := s.provisionWordPressInstall(ctx, opts.Domain, docRoot, phpVersion, siteURL)
 		if err != nil {
 			return err
 		}
@@ -1545,7 +1546,7 @@ type wpAdminAccess struct {
 	SecretsFile   string
 }
 
-func (s SiteService) provisionWordPressInstall(ctx context.Context, domain, docRoot, phpVersion string) (*wpAdminAccess, error) {
+func (s SiteService) provisionWordPressInstall(ctx context.Context, domain, docRoot, phpVersion, installURL string) (*wpAdminAccess, error) {
 	dbName, dbUser := deriveWordPressDBIdentifiers(domain)
 	dbPassword, err := generateSecurePassword(24)
 	if err != nil {
@@ -1589,7 +1590,6 @@ func (s SiteService) provisionWordPressInstall(ctx context.Context, domain, docR
 
 	adminUser := "admin"
 	adminEmail := "admin@" + domain
-	installURL := wordPressBaseURL(domain)
 	if err := s.runWPCLI(ctx, phpPath, wpCLIPath,
 		"core", "install",
 		"--path="+docRoot,
@@ -1676,8 +1676,12 @@ func (s SiteService) installAndActivateLiteSpeedCachePlugin(ctx context.Context,
 	return nil
 }
 
-func wordPressBaseURL(domain string) string {
-	return "http://" + strings.TrimSpace(strings.ToLower(domain))
+func wordPressBaseURL(domain string, secure bool) string {
+	scheme := "http"
+	if secure {
+		scheme = "https"
+	}
+	return scheme + "://" + strings.TrimSpace(strings.ToLower(domain))
 }
 
 func (s SiteService) createWordPressDatabase(ctx context.Context, dbName, dbUser, dbPassword string) error {
