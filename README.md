@@ -33,6 +33,36 @@ If you need reproducible installs, pin a specific tag instead of `latest`.
 
 ## Usage
 
+This section now provides:
+- a quick command overview table
+- a dedicated `ols site` subcommand/option table
+- practical examples underneath
+
+### Command overview
+
+| Command | Purpose | Common options |
+| --- | --- | --- |
+| `ols install` | Install/align OpenLiteSpeed runtime and related packages | `--php81` `--php82` `--php83` `--php84` `--php85` `--database` `--config` `--http-port` `--https-port` `--ssl-cert` `--ssl-key` `--no-listeners` |
+| `ols site create <domain>` | Create a new site/vhost | `--wp` `--le` `--php81` `--php82` `--php83` `--php84` `--php85` |
+| `ols site update <domain>` | Update an existing site (PHP target is required) | `--wp` `--php81` `--php82` `--php83` `--php84` `--php85` |
+| `ols site info <domain>` | Show site metadata and detected status | *(none)* |
+| `ols site show <domain>` | Print OLS virtual host config (`vhconf.conf`) | *(none)* |
+| `ols site list` | List managed sites discovered from OLS vhost directory | *(none)* |
+| `ols site delete <domain>` | Remove site config/files and optionally keep DB | `--keep-db` |
+
+Global options (apply to all commands): `--dry-run`, `--color`
+
+### `ols site` subcommands and options
+
+| Subcommand | Syntax | Options |
+| --- | --- | --- |
+| `create` | `ols site create <domain>` | `--wp` `--le` `--php81` `--php82` `--php83` `--php84` `--php85` |
+| `update` | `ols site update <domain>` | `--wp` and exactly one of `--php81` `--php82` `--php83` `--php84` `--php85` |
+| `info` | `ols site info <domain>` | *(none)* |
+| `show` | `ols site show <domain>` | *(none)* |
+| `list` | `ols site list` | *(none)* |
+| `delete` | `ols site delete <domain>` | `--keep-db` |
+
 ### Install runtime once (required before provisioning)
 
 ```bash
@@ -66,19 +96,6 @@ sudo ols install --no-listeners
 ```bash
 sudo ols site create example.com --wp --le --php85
 ```
-
-This command now creates:
-- Virtual host config directory under `/usr/local/lsws/conf/vhosts/<domain>/`
-- `vhconf.conf` and `vhost.conf`
-- Document root under `/var/www/<domain>/html`
-- WordPress files when `--wp` is enabled
-- LiteSpeed Cache plugin in `wp-content/plugins/litespeed-cache` when `--wp` is enabled
-- WordPress database/user + `wp-config.php` + `wp core install` when `--wp` is enabled
-- Console output with WordPress admin URL, admin user, and generated admin password when `--wp` is enabled
-- Credential persistence at `/etc/ols-cli/sites/<domain>/credentials.txt` (mode `0600`) when `--wp` is enabled
-- Domain registration into `/usr/local/lsws/conf/httpd_config.conf` (virtualhost + listener maps for `Default` and `SSL` when present)
-- Let's Encrypt certificate issuance through `certbot` (webroot challenge)
-- SSL cert/key wiring into vhost `vhssl` (`certFile` and `keyFile`)
 
 ### Create a site with defaults (WordPress + PHP 8.5)
 
