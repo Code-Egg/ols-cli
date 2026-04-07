@@ -2,8 +2,6 @@ package service
 
 import (
 	"archive/tar"
-	"archive/zip"
-	"bytes"
 	"compress/gzip"
 	"context"
 	crand "crypto/rand"
@@ -247,7 +245,7 @@ func (s SiteService) CreateSite(ctx context.Context, opts CreateSiteOptions) err
 		s.console.Bullet("apply ownership from OpenLiteSpeed user/group in " + serverConfigPath)
 		if opts.WithWordPress {
 			s.console.Bullet("download and extract WordPress into " + docRoot)
-			s.console.Bullet("download and install LiteSpeed Cache plugin")
+			s.console.Bullet("install and activate LiteSpeed Cache plugin via wp-cli")
 			s.console.Bullet("create WordPress database and database user")
 			s.console.Bullet("generate and print WordPress admin credentials")
 			s.console.Bullet("finish WordPress installation via wp-cli")
@@ -290,7 +288,7 @@ func (s SiteService) CreateSite(ctx context.Context, opts CreateSiteOptions) err
 	}
 
 	if opts.WithWordPress {
-		if err := ensureWordPressWithLSCache(docRoot); err != nil {
+		if err := ensureWordPressFiles(docRoot); err != nil {
 			return err
 		}
 		installedAccess, err := s.provisionWordPressInstall(ctx, opts.Domain, docRoot, phpVersion)
@@ -392,7 +390,7 @@ func (s SiteService) UpdateSitePHP(ctx context.Context, opts UpdateSiteOptions) 
 		s.console.Bullet("rewrite PHP handler in " + vhostConfig)
 		if opts.WithWordPress {
 			s.console.Bullet("ensure WordPress files exist in " + docRoot)
-			s.console.Bullet("ensure LiteSpeed Cache plugin exists in " + filepath.Join(docRoot, "wp-content", "plugins", "litespeed-cache"))
+			s.console.Bullet("install and activate LiteSpeed Cache plugin via wp-cli")
 		}
 		s.console.Success("Dry-run plan generated")
 		return nil
@@ -416,7 +414,10 @@ func (s SiteService) UpdateSitePHP(ctx context.Context, opts UpdateSiteOptions) 
 	}
 
 	if opts.WithWordPress {
-		if err := ensureWordPressWithLSCache(docRoot); err != nil {
+		if err := ensureWordPressFiles(docRoot); err != nil {
+			return err
+		}
+		if err := s.installAndActivateLiteSpeedCachePlugin(ctx, phpVersion, docRoot); err != nil {
 			return err
 		}
 		s.console.Success("WordPress + LiteSpeed Cache reconciled")
@@ -1524,14 +1525,11 @@ func installWordPress(docRoot string) error {
 	return nil
 }
 
-func ensureWordPressWithLSCache(docRoot string) error {
+func ensureWordPressFiles(docRoot string) error {
 	if !looksLikeWordPressDocRoot(docRoot) {
 		if err := installWordPress(docRoot); err != nil {
 			return err
 		}
-	}
-	if err := installLiteSpeedCachePlugin(docRoot); err != nil {
-		return err
 	}
 	return nil
 }
@@ -1610,7 +1608,9 @@ func (s SiteService) provisionWordPressInstall(ctx context.Context, domain, docR
 	}
 
 	if err := s.runWPCLI(ctx, phpPath, wpCLIPath,
-		"plugin", "activate", "litespeed-cache",
+		"plugin", "install", "litespeed-cache",
+		"--activate",
+		"--force",
 		"--path="+docRoot,
 		"--allow-root",
 	); err != nil {
@@ -1640,6 +1640,38 @@ func (s SiteService) ensureWordPressURLs(ctx context.Context, phpPath, wpCLIPath
 		if err := s.runWPCLI(ctx, phpPath, wpCLIPath, args...); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func (s SiteService) installAndActivateLiteSpeedCachePlugin(ctx context.Context, phpVersion, docRoot string) error {
+	if !fileExists(filepath.Join(docRoot, "wp-config.php")) {
+		return apperr.New(
+			apperr.CodeValidation,
+			fmt.Sprintf("wp-config.php not found in %s; cannot install LiteSpeed Cache via wp-cli", docRoot),
+		)
+	}
+
+	phpPath, err := s.resolvePHPCLIPath(phpVersion)
+	if err != nil {
+		return err
+	}
+	wpCLIPath := filepath.Join(docRoot, ".ols-wp-cli.phar")
+	if err := ensureWPCLIPhar(wpCLIPath); err != nil {
+		return err
+	}
+	defer func() {
+		_ = os.Remove(wpCLIPath)
+	}()
+
+	if err := s.runWPCLI(ctx, phpPath, wpCLIPath,
+		"plugin", "install", "litespeed-cache",
+		"--activate",
+		"--force",
+		"--path="+docRoot,
+		"--allow-root",
+	); err != nil {
+		return err
 	}
 	return nil
 }
@@ -1860,100 +1892,6 @@ func escapeSQLString(v string) string {
 
 func shellSingleQuote(v string) string {
 	return "'" + strings.ReplaceAll(v, "'", "'\\''") + "'"
-}
-
-func installLiteSpeedCachePlugin(docRoot string) error {
-	const pluginURL = "https://downloads.wordpress.org/plugin/litespeed-cache.latest-stable.zip"
-
-	pluginsRoot := filepath.Join(docRoot, "wp-content", "plugins")
-	if err := os.MkdirAll(pluginsRoot, 0o755); err != nil {
-		return apperr.Wrap(apperr.CodeConfig, "failed to prepare plugin directory", err)
-	}
-
-	client := &http.Client{Timeout: 2 * time.Minute}
-	resp, err := client.Get(pluginURL)
-	if err != nil {
-		return apperr.Wrap(apperr.CodeCommand, "failed to download LiteSpeed Cache plugin", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return apperr.New(apperr.CodeCommand, fmt.Sprintf("failed to download LiteSpeed Cache plugin: http %d", resp.StatusCode))
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return apperr.Wrap(apperr.CodeCommand, "failed to read LiteSpeed Cache plugin archive", err)
-	}
-
-	zr, err := zip.NewReader(bytes.NewReader(body), int64(len(body)))
-	if err != nil {
-		return apperr.Wrap(apperr.CodeCommand, "failed to open LiteSpeed Cache plugin archive", err)
-	}
-
-	root := filepath.Clean(pluginsRoot)
-	for _, zf := range zr.File {
-		cleanName := path.Clean(zf.Name)
-		if cleanName == "." || cleanName == "litespeed-cache" {
-			continue
-		}
-		if !strings.HasPrefix(cleanName, "litespeed-cache/") {
-			continue
-		}
-
-		rel := strings.TrimPrefix(cleanName, "litespeed-cache/")
-		if rel == "" {
-			continue
-		}
-
-		target := filepath.Join(root, filepath.FromSlash(rel))
-		cleanTarget := filepath.Clean(target)
-		if cleanTarget != root && !strings.HasPrefix(cleanTarget, root+string(os.PathSeparator)) {
-			return apperr.New(apperr.CodeConfig, "unsafe LiteSpeed Cache archive path detected")
-		}
-
-		if zf.FileInfo().IsDir() {
-			if err := os.MkdirAll(cleanTarget, 0o755); err != nil {
-				return apperr.Wrap(apperr.CodeConfig, "failed to create plugin directory", err)
-			}
-			continue
-		}
-
-		if err := os.MkdirAll(filepath.Dir(cleanTarget), 0o755); err != nil {
-			return apperr.Wrap(apperr.CodeConfig, "failed to create plugin file directory", err)
-		}
-
-		src, err := zf.Open()
-		if err != nil {
-			return apperr.Wrap(apperr.CodeConfig, "failed to open plugin file from archive", err)
-		}
-
-		mode := zf.Mode()
-		if mode == 0 {
-			mode = 0o644
-		}
-		dst, err := os.OpenFile(cleanTarget, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
-		if err != nil {
-			_ = src.Close()
-			return apperr.Wrap(apperr.CodeConfig, "failed to create plugin file", err)
-		}
-
-		if _, err := io.Copy(dst, src); err != nil {
-			_ = dst.Close()
-			_ = src.Close()
-			return apperr.Wrap(apperr.CodeConfig, "failed to write plugin file", err)
-		}
-
-		if err := dst.Close(); err != nil {
-			_ = src.Close()
-			return apperr.Wrap(apperr.CodeConfig, "failed to finalize plugin file", err)
-		}
-		if err := src.Close(); err != nil {
-			return apperr.Wrap(apperr.CodeConfig, "failed to close plugin archive stream", err)
-		}
-	}
-
-	return nil
 }
 
 func buildVHostDefinition(domain, siteRoot, vhostConfigPath string) string {
