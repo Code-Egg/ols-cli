@@ -14,6 +14,7 @@ It is currently focused on clear command behavior, predictable output, and safe 
   - `ols site create <domain> --wp [--le] [--php81|--php82|--php83|--php84|--php85]`
   - `ols site update <domain> [--wp] --php81|--php82|--php83|--php84|--php85`
   - `ols site info <domain>`
+  - `ols site show <domain>`
   - `ols site list`
 - Structured errors with stable machine-readable codes
 - Styled terminal output for clearer operations
@@ -127,6 +128,12 @@ sudo ols site update example.com --wp --php83
 ols site info example.com
 ```
 
+### Show OpenLiteSpeed virtual host config
+
+```bash
+ols site show example.com
+```
+
 ### List managed sites
 
 ```bash
@@ -139,6 +146,7 @@ ols site list
 ols --dry-run site create example.com --wp --le --php85
 ols --dry-run site update example.com --wp --php83
 ols --dry-run site info example.com
+ols --dry-run site show example.com
 ols --dry-run site list
 ```
 

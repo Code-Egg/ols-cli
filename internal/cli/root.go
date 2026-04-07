@@ -128,8 +128,8 @@ func configureColorOutput(mode string) error {
 }
 
 func applyColorHelpTemplate(cmd *cobra.Command) {
-	colored := colorizeHelpTemplate(cmd.HelpTemplate())
-	cmd.SetHelpTemplate(colored)
+	cmd.SetHelpTemplate(colorizeHelpTemplate(cmd.HelpTemplate()))
+	cmd.SetUsageTemplate(colorizeHelpTemplate(cmd.UsageTemplate()))
 	for _, c := range cmd.Commands() {
 		applyColorHelpTemplate(c)
 	}
@@ -146,10 +146,12 @@ func colorizeHelpTemplate(template string) string {
 	)
 	return strings.NewReplacer(
 		"Usage:", "\n"+boldCyan+"USAGE"+reset+"\n"+dimWhite+"─────"+reset,
+		"Aliases:", "\n"+boldGreen+"ALIASES"+reset+"\n"+dimWhite+"───────"+reset,
+		"Examples:", "\n"+boldYellow+"EXAMPLES"+reset+"\n"+dimWhite+"────────"+reset,
 		"Available Commands:", "\n"+boldGreen+"AVAILABLE COMMANDS"+reset+"\n"+dimWhite+"──────────────────"+reset,
 		"Flags:", "\n"+boldBlue+"FLAGS"+reset+"\n"+dimWhite+"─────"+reset,
 		"Global Flags:", "\n"+boldBlue+"GLOBAL FLAGS"+reset+"\n"+dimWhite+"────────────"+reset,
-		"Examples:", "\n"+boldYellow+"EXAMPLES"+reset+"\n"+dimWhite+"────────"+reset,
+		"Additional help topics:", "\n"+boldGreen+"ADDITIONAL HELP TOPICS"+reset+"\n"+dimWhite+"──────────────────────"+reset,
 	).Replace(template)
 }
 

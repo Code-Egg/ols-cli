@@ -120,6 +120,11 @@ type ListSitesOptions struct {
 	DryRun bool
 }
 
+type ShowSiteConfigOptions struct {
+	Domain string
+	DryRun bool
+}
+
 func (s SiteService) InstallRuntime(ctx context.Context, opts InstallOptions) error {
 	info, err := s.detector.Detect(ctx)
 	if err != nil {
@@ -134,6 +139,7 @@ func (s SiteService) InstallRuntime(ctx context.Context, opts InstallOptions) er
 	pkgs := packagesForInstall(plan.PHPVersion, plan.DatabasePackage)
 
 	s.console.Section("Install runtime")
+	s.console.Info("Preparing runtime installation plan")
 	s.console.Bullet("Platform: " + info.Summary())
 	s.console.Bullet("Config: " + plan.ConfigPath)
 	s.console.Bullet("PHP: lsphp" + plan.PHPVersion)
@@ -483,6 +489,35 @@ func (s SiteService) DeleteSite(ctx context.Context, opts DeleteSiteOptions) err
 	s.console.Bullet("Removed vhost directory: " + vhostDir)
 	s.console.Bullet("Removed site root: " + siteRoot)
 	s.console.Bullet("Server config updated: " + serverConfigPath)
+	return nil
+}
+
+func (s SiteService) ShowSiteConfig(_ context.Context, opts ShowSiteConfigOptions) error {
+	if err := ValidateDomain(opts.Domain); err != nil {
+		return err
+	}
+
+	domain := strings.ToLower(strings.TrimSpace(opts.Domain))
+	vhostConfig := filepath.Join(s.lswsRoot, "conf", "vhosts", domain, "vhconf.conf")
+	if !fileExists(vhostConfig) {
+		return apperr.New(apperr.CodeValidation, fmt.Sprintf("virtual host config not found for %s at %s", domain, vhostConfig))
+	}
+
+	if opts.DryRun {
+		s.console.Warn("Dry-run flag has no side effects for read-only show output")
+	}
+
+	b, err := os.ReadFile(vhostConfig)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeConfig, "failed to read virtual host config", err)
+	}
+
+	s.console.Section("Site show")
+	s.console.Bullet("Domain: " + domain)
+	s.console.Bullet("VHost config: " + vhostConfig)
+	for _, line := range strings.Split(strings.TrimRight(string(b), "\n"), "\n") {
+		s.console.Bullet(line)
+	}
 	return nil
 }
 

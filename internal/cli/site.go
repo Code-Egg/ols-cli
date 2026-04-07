@@ -13,6 +13,7 @@ type siteManager interface {
 	CreateSite(ctx context.Context, opts service.CreateSiteOptions) error
 	UpdateSitePHP(ctx context.Context, opts service.UpdateSiteOptions) error
 	SiteInfo(ctx context.Context, opts service.SiteInfoOptions) error
+	ShowSiteConfig(ctx context.Context, opts service.ShowSiteConfigOptions) error
 	ListSites(ctx context.Context, opts service.ListSitesOptions) error
 	DeleteSite(ctx context.Context, opts service.DeleteSiteOptions) error
 }
@@ -76,6 +77,7 @@ func newSiteCmd(svc siteManager, rootOpts *rootOptions) *cobra.Command {
 	siteCmd.AddCommand(newSiteCreateCmd(svc, rootOpts))
 	siteCmd.AddCommand(newSiteUpdateCmd(svc, rootOpts))
 	siteCmd.AddCommand(newSiteInfoCmd(svc, rootOpts))
+	siteCmd.AddCommand(newSiteShowCmd(svc, rootOpts))
 	siteCmd.AddCommand(newSiteListCmd(svc, rootOpts))
 	siteCmd.AddCommand(newSiteDeleteCmd(svc, rootOpts))
 	return siteCmd
@@ -168,6 +170,26 @@ func newSiteInfoCmd(svc siteManager, rootOpts *rootOptions) *cobra.Command {
 			})
 			if err != nil {
 				return fmt.Errorf("site info failed: %w", err)
+			}
+			return nil
+		},
+	}
+	return cmd
+}
+
+func newSiteShowCmd(svc siteManager, rootOpts *rootOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:     "show <domain>",
+		Short:   "Display OpenLiteSpeed virtual host config",
+		Example: "ols site show example.com",
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			err := svc.ShowSiteConfig(cmd.Context(), service.ShowSiteConfigOptions{
+				Domain: args[0],
+				DryRun: rootOpts.DryRun,
+			})
+			if err != nil {
+				return fmt.Errorf("site show failed: %w", err)
 			}
 			return nil
 		},
