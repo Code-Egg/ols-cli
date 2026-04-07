@@ -4,31 +4,7 @@ A practical CLI for managing the OpenLiteSpeed + WordPress lifecycle on Linux se
 
 It is currently focused on clear command behavior, predictable output, and safe automation patterns.
 
-## Current scope
-
-- Linux distro targeting:
-  - Ubuntu / Debian
-  - CentOS-family (CentOS, Rocky, AlmaLinux)
-- Commands available:
-  - `ols install [--php81|--php82|--php83|--php84|--php85] [--database mariadb|mysql|none] [--config /path/install.json]`
-  - `ols site create <domain> --wp [--le] [--php81|--php82|--php83|--php84|--php85]`
-  - `ols site update <domain> [--wp] --php81|--php82|--php83|--php84|--php85`
-  - `ols site info <domain>`
-  - `ols site show <domain>`
-  - `ols site list`
-- Structured errors with stable machine-readable codes
-- Styled terminal output for clearer operations
-- Unit tests and CI scaffold
-
-## Why Go
-
-- Single compiled binary for deployment consistency
-- Strong type safety for privileged automation code
-- Built-in test tooling with straightforward CI integration
-
-If release binaries are published, end users do not need to compile from source.
-
-## Installation channels
+## Installation
 
 ### 1) Direct binary download (recommended)
 
