@@ -6,7 +6,7 @@ It is currently focused on clear command behavior, predictable output, and safe 
 
 ## Installation
 
-### 1) Direct binary download (recommended)
+### Direct binary download
 
 Pick the correct architecture (`amd64` or `arm64`) and download directly from GitHub Releases.
 
@@ -30,6 +30,13 @@ sha256sum /usr/local/bin/ols
 ```
 
 If you need reproducible installs, pin a specific tag instead of `latest`.
+
+
+### Build Locally
+```
+git clone https://github.com/Code-Egg/ols-cli; cd ols-cli
+go build -o ols ./cmd/ols
+```
 
 ## Usage
 
