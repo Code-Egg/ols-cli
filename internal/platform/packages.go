@@ -27,11 +27,12 @@ func (i PackageInstaller) Install(ctx context.Context, packages ...string) error
 	var err error
 	switch i.info.PackageManager {
 	case PackageManagerAPT:
-		_, err = i.runner.Run(ctx, "apt-get", append([]string{"update"}, []string{}...)...)
+		_, err = i.runner.Run(ctx, "env", "DEBIAN_FRONTEND=noninteractive", "apt-get", "update")
 		if err != nil {
 			return apperr.Wrap(apperr.CodeCommand, "apt metadata refresh failed", err)
 		}
-		_, err = i.runner.Run(ctx, "apt-get", append([]string{"install", "-y"}, pkgs...)...)
+		installArgs := append([]string{"DEBIAN_FRONTEND=noninteractive", "apt-get", "install", "-y", "-o", "Dpkg::Use-Pty=0"}, pkgs...)
+		_, err = i.runner.Run(ctx, "env", installArgs...)
 	case PackageManagerYUM:
 		_, err = i.runner.Run(ctx, "yum", append([]string{"install", "-y"}, pkgs...)...)
 	case PackageManagerDNF:
