@@ -31,10 +31,10 @@ func TestPackageInstallerAPT(t *testing.T) {
 	if len(fr.calls) != 2 {
 		t.Fatalf("expected 2 calls, got %d", len(fr.calls))
 	}
-	if fr.calls[0][0] != "apt-get" || fr.calls[0][1] != "update" {
+	if fr.calls[0][0] != "env" || fr.calls[0][1] != "DEBIAN_FRONTEND=noninteractive" || fr.calls[0][2] != "apt-get" || fr.calls[0][3] != "update" {
 		t.Fatalf("unexpected first call: %#v", fr.calls[0])
 	}
-	if fr.calls[1][0] != "apt-get" || fr.calls[1][1] != "install" {
+	if fr.calls[1][0] != "env" || fr.calls[1][1] != "DEBIAN_FRONTEND=noninteractive" || fr.calls[1][2] != "apt-get" || fr.calls[1][3] != "install" {
 		t.Fatalf("unexpected second call: %#v", fr.calls[1])
 	}
 }
