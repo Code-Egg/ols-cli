@@ -157,7 +157,7 @@ main() {
   url="https://github.com/${REPO}/releases/latest/download/${BIN_NAME}-linux-${arch}"
   tmp_file="$(mktemp)"
 
-  trap 'rm -f "$tmp_file"' EXIT
+  trap 'if [ -n "${tmp_file:-}" ]; then rm -f "$tmp_file"; fi' EXIT
 
   log "Downloading ${BIN_NAME} (${arch}) from latest release..."
   if command -v curl >/dev/null 2>&1; then

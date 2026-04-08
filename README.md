@@ -23,14 +23,6 @@ Use the one-line installer:
 bash <(curl -fsSL https://raw.githubusercontent.com/Code-Egg/ols-cli/master/install_olscli.sh)
 ```
 
-What this installer does:
-- Detects Linux architecture (`amd64` or `arm64`).
-- Downloads the latest `ols` binary from GitHub Releases.
-- Installs it to `/usr/local/bin/ols` with executable permissions.
-- Detects Go and auto-installs it:
-  - Debian/Ubuntu: `golang-go` via `apt-get`
-  - CentOS/RHEL-family: `golang` via `dnf` or `yum`
-
 ## Usage
 
 This section now provides:
