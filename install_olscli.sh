@@ -4,6 +4,7 @@ set -euo pipefail
 REPO="${REPO:-Code-Egg/ols-cli}"
 BIN_NAME="ols"
 INSTALL_DIR="/usr/local/bin"
+TMP_FILE=""
 
 log() {
   printf '\033[1;34m[ols-installer]\033[0m %s\n' "$1"
@@ -15,6 +16,12 @@ warn() {
 
 err() {
   printf '\033[1;31m[ols-installer]\033[0m %s\n' "$1" >&2
+}
+
+cleanup() {
+  if [ -n "${TMP_FILE:-}" ]; then
+    rm -f "$TMP_FILE"
+  fi
 }
 
 run_as_root() {
@@ -152,31 +159,31 @@ main() {
   ensure_go_installed
   ensure_downloader
 
-  local arch url tmp_file
+  local arch url
   arch="$(detect_arch)"
   url="https://github.com/${REPO}/releases/latest/download/${BIN_NAME}-linux-${arch}"
-  tmp_file="$(mktemp)"
-
-  trap 'if [ -n "${tmp_file:-}" ]; then rm -f "$tmp_file"; fi' EXIT
+  TMP_FILE="$(mktemp)"
 
   log "Downloading ${BIN_NAME} (${arch}) from latest release..."
   if command -v curl >/dev/null 2>&1; then
-    curl -fsSL --retry 3 --retry-delay 1 "$url" -o "$tmp_file"
+    curl -fsSL --retry 3 --retry-delay 1 "$url" -o "$TMP_FILE"
   else
-    wget -qO "$tmp_file" "$url"
+    wget -qO "$TMP_FILE" "$url"
   fi
 
-  if [ ! -s "$tmp_file" ]; then
+  if [ ! -s "$TMP_FILE" ]; then
     err "download failed or produced an empty file"
     exit 1
   fi
 
   run_as_root install -d "$INSTALL_DIR"
-  run_as_root install -m 0755 "$tmp_file" "${INSTALL_DIR}/${BIN_NAME}"
+  run_as_root install -m 0755 "$TMP_FILE" "${INSTALL_DIR}/${BIN_NAME}"
   run_as_root chmod u+w "${INSTALL_DIR}/${BIN_NAME}"
 
   log "Installed ${BIN_NAME} to ${INSTALL_DIR}/${BIN_NAME}"
   log "Run '${BIN_NAME} --help' to verify"
 }
+
+trap cleanup EXIT
 
 main "$@"
