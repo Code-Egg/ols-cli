@@ -2,27 +2,26 @@
 
 A practical CLI for managing the OpenLiteSpeed + WordPress lifecycle on Linux servers.
 
-It is currently focused on clear command behavior, predictable output, and safe automation patterns.
-
 ## Installation
 
 ### Direct binary download
 
 Pick the correct architecture (`amd64` or `arm64`) and download directly from GitHub Releases.
 
+**AMD64**
 ```bash
 sudo wget -O /usr/local/bin/ols https://github.com/Code-Egg/ols-cli/releases/latest/download/ols-linux-amd64
 sudo chmod +x /usr/local/bin/ols
 ```
 
-For ARM64 servers:
+**ARM64**
 
 ```bash
 sudo wget -O /usr/local/bin/ols https://github.com/Code-Egg/ols-cli/releases/latest/download/ols-linux-arm64
 sudo chmod +x /usr/local/bin/ols
 ```
 
-Optional checksum verification:
+**Verify Installation (Optional)**
 
 ```bash
 wget https://github.com/Code-Egg/ols-cli/releases/latest/download/checksums.txt
@@ -30,13 +29,6 @@ sha256sum /usr/local/bin/ols
 ```
 
 If you need reproducible installs, pin a specific tag instead of `latest`.
-
-
-### Build Locally
-```
-git clone https://github.com/Code-Egg/ols-cli; cd ols-cli
-go build -o ols ./cmd/ols
-```
 
 ## Usage
 
