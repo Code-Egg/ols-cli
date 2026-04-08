@@ -1,7 +1,9 @@
 # OLS CLI
 
 [![CI Status](https://github.com/Code-Egg/ols-cli/workflows/ci/badge.svg)](https://github.com/Code-Egg/ols-cli/actions/)
-[![Build Status](https://github.com/Code-Egg/ols-cli/workflows/ci/badge.svg)](https://github.com/Code-Egg/ols-cli/actions/)
+[![Release Status](https://github.com/Code-Egg/ols-cli/workflows/release/badge.svg)](https://github.com/Code-Egg/ols-cli/actions/workflows/release.yml)
+[![Go](https://img.shields.io/badge/Go-1.22+-00ADD8?logo=go&logoColor=white)](https://go.dev/)
+[![Release](https://img.shields.io/github/v/release/Code-Egg/ols-cli?display_name=tag)](https://github.com/Code-Egg/ols-cli/releases)
 
 
 A practical CLI for managing the OpenLiteSpeed + WordPress lifecycle on Linux servers.
