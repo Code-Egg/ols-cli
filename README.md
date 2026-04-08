@@ -8,33 +8,28 @@
 
 A practical CLI for managing the OpenLiteSpeed + WordPress lifecycle on Linux servers.
 
+## Supported systems
+
+| Category | Supported |
+| --- | --- |
+| OS | Ubuntu, Debian, CentOS, AlmaLinux, Rocky Linux |
+| CPU Architecture | `amd64` (x86_64), `arm64` (aarch64) |
+
 ## Installation
 
-### Direct binary download
-
-Pick the correct architecture (`amd64` or `arm64`) and download directly from GitHub Releases.
-
-**AMD64**
-```bash
-sudo wget -O /usr/local/bin/ols https://github.com/Code-Egg/ols-cli/releases/latest/download/ols-linux-amd64
-sudo chmod +x /usr/local/bin/ols
-```
-
-**ARM64**
+Use the one-line installer:
 
 ```bash
-sudo wget -O /usr/local/bin/ols https://github.com/Code-Egg/ols-cli/releases/latest/download/ols-linux-arm64
-sudo chmod +x /usr/local/bin/ols
+bash <(curl -fsSL https://raw.githubusercontent.com/Code-Egg/ols-cli/master/install_olscli.sh)
 ```
 
-**Verify Installation (Optional)**
-
-```bash
-wget https://github.com/Code-Egg/ols-cli/releases/latest/download/checksums.txt
-sha256sum /usr/local/bin/ols
-```
-
-If you need reproducible installs, pin a specific tag instead of `latest`.
+What this installer does:
+- Detects Linux architecture (`amd64` or `arm64`).
+- Downloads the latest `ols` binary from GitHub Releases.
+- Installs it to `/usr/local/bin/ols` with executable permissions.
+- Detects Go and auto-installs it:
+  - Debian/Ubuntu: `golang-go` via `apt-get`
+  - CentOS/RHEL-family: `golang` via `dnf` or `yum`
 
 ## Usage
 
