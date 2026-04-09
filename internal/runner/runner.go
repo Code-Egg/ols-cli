@@ -36,12 +36,70 @@ func (ExecRunner) Run(ctx context.Context, name string, args ...string) (Result,
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
+		safeArgs := redactCommandArgs(args)
 		return Result{Stdout: stdout.String(), Stderr: stderr.String()}, apperr.Wrap(
 			apperr.CodeCommand,
-			fmt.Sprintf("command failed: %s %s", name, strings.Join(args, " ")),
+			fmt.Sprintf("command failed: %s %s", name, strings.Join(safeArgs, " ")),
 			err,
 		)
 	}
 
 	return Result{Stdout: stdout.String(), Stderr: stderr.String()}, nil
+}
+
+func redactCommandArgs(args []string) []string {
+	if len(args) == 0 {
+		return nil
+	}
+
+	out := make([]string, len(args))
+	redactNext := false
+	for i, arg := range args {
+		if redactNext {
+			out[i] = "<redacted>"
+			redactNext = false
+			continue
+		}
+
+		lower := strings.ToLower(strings.TrimSpace(arg))
+		if lower == "" {
+			out[i] = arg
+			continue
+		}
+
+		if key, _, ok := strings.Cut(lower, "="); ok {
+			if isSensitiveArgKey(key) {
+				prefixLen := len(arg) - len(strings.TrimPrefix(lower, key+"="))
+				if prefixLen < 0 || prefixLen > len(arg) {
+					out[i] = key + "=<redacted>"
+				} else {
+					out[i] = arg[:prefixLen] + "<redacted>"
+				}
+				continue
+			}
+		}
+
+		if isSensitiveArgKey(lower) {
+			out[i] = arg
+			redactNext = true
+			continue
+		}
+
+		if strings.HasPrefix(lower, "-p") && len(arg) > 2 {
+			out[i] = arg[:2] + "<redacted>"
+			continue
+		}
+
+		out[i] = arg
+	}
+	return out
+}
+
+func isSensitiveArgKey(key string) bool {
+	switch strings.TrimSpace(strings.ToLower(key)) {
+	case "--password", "--admin_password", "--dbpass", "--db-password", "--db_password", "--secret", "--token", "--api-key", "--apikey":
+		return true
+	default:
+		return false
+	}
 }

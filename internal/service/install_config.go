@@ -176,6 +176,12 @@ func resolveInstallPlan(opts InstallOptions, info platform.Info, lswsRoot string
 		if sslKeyFile == "" {
 			return resolvedInstallPlan{}, apperr.New(apperr.CodeValidation, "ssl_key_file is required when listener configuration is enabled")
 		}
+		if err := validatePathLikeValue(sslCertFile, "ssl_cert_file"); err != nil {
+			return resolvedInstallPlan{}, err
+		}
+		if err := validatePathLikeValue(sslKeyFile, "ssl_key_file"); err != nil {
+			return resolvedInstallPlan{}, err
+		}
 	}
 
 	return resolvedInstallPlan{
@@ -228,6 +234,22 @@ func databasePackageFor(engine string, pm platform.PackageManager) (string, erro
 func validatePort(port int, field string) error {
 	if port < 1 || port > 65535 {
 		return apperr.New(apperr.CodeValidation, fmt.Sprintf("%s must be between 1 and 65535", field))
+	}
+	return nil
+}
+
+func validatePathLikeValue(v, field string) error {
+	candidate := strings.TrimSpace(v)
+	if candidate == "" {
+		return apperr.New(apperr.CodeValidation, fmt.Sprintf("%s is required", field))
+	}
+	if strings.ContainsAny(candidate, "\r\n\x00") {
+		return apperr.New(apperr.CodeValidation, fmt.Sprintf("%s contains unsafe control characters", field))
+	}
+	for _, r := range candidate {
+		if r < 0x20 {
+			return apperr.New(apperr.CodeValidation, fmt.Sprintf("%s contains unsafe control characters", field))
+		}
 	}
 	return nil
 }

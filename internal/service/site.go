@@ -5,6 +5,9 @@ import (
 	"compress/gzip"
 	"context"
 	crand "crypto/rand"
+	"crypto/sha1"
+	"crypto/sha512"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"io/fs"
@@ -29,6 +32,7 @@ var (
 	lsphpNamePattern    = regexp.MustCompile(`lsphp[0-9]{2}`)
 	nonAlphaNumPattern  = regexp.MustCompile(`[^a-z0-9]+`)
 	multiUnderscoreExpr = regexp.MustCompile(`_+`)
+	hexDigestPattern    = regexp.MustCompile(`(?i)[a-f0-9]{40,128}`)
 	letsencryptLiveRoot = "/etc/letsencrypt/live"
 )
 
@@ -36,7 +40,10 @@ const (
 	defaultLSWSRoot    = "/usr/local/lsws"
 	defaultWebRoot     = "/var/www"
 	defaultSecretsRoot = "/etc/ols-cli/sites"
+	wpArchiveURL       = "https://wordpress.org/latest.tar.gz"
+	wpArchiveSHA1URL   = "https://wordpress.org/latest.tar.gz.sha1"
 	wpCLIPharURL       = "https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar"
+	wpCLIPharSHA512URL = "https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar.sha512"
 )
 
 type phpINISetting struct {
@@ -347,7 +354,7 @@ func (s SiteService) CreateSite(ctx context.Context, opts CreateSiteOptions) err
 		s.console.Success("WordPress admin setup completed")
 		s.console.Bullet("Admin URL: " + wpAccess.AdminURL)
 		s.console.Bullet("Admin User: " + wpAccess.AdminUser)
-		s.console.Bullet("Admin Password: " + wpAccess.AdminPassword)
+		s.console.Bullet("Admin Password: stored in secrets file")
 		s.console.Bullet("Secrets file: " + wpAccess.SecretsFile)
 	}
 	return nil
@@ -787,18 +794,43 @@ func upsertINIValue(content, key, value string) (string, bool) {
 }
 
 func (s SiteService) configureLiteSpeedRepo(ctx context.Context, info platform.Info) error {
+	s.console.Bullet("Using hardened mode: repository bootstrap scripts are disabled")
+	if err := verifyLiteSpeedPackageAvailability(ctx, s.runner, info); err != nil {
+		return err
+	}
+	return nil
+}
+
+func verifyLiteSpeedPackageAvailability(ctx context.Context, run runner.Runner, info platform.Info) error {
 	switch info.PackageManager {
-	case platform.PackageManagerAPT, platform.PackageManagerYUM, platform.PackageManagerDNF:
-		setup := "if command -v wget >/dev/null 2>&1; then wget -qO - https://repo.litespeed.sh | bash; " +
-			"elif command -v curl >/dev/null 2>&1; then curl -fsSL https://repo.litespeed.sh | bash; " +
-			"else echo 'wget or curl is required to add LiteSpeed repo' >&2; exit 1; fi"
-		if _, err := s.runner.Run(ctx, "bash", "-c", setup); err != nil {
-			return apperr.Wrap(apperr.CodeCommand, "failed to configure LiteSpeed package repository", err)
+	case platform.PackageManagerAPT:
+		if _, err := run.Run(ctx, "apt-cache", "show", "openlitespeed"); err != nil {
+			return apperr.Wrap(
+				apperr.CodeCommand,
+				"openlitespeed package is not available via apt repositories; configure the LiteSpeed repository manually",
+				err,
+			)
 		}
-		return nil
+	case platform.PackageManagerYUM:
+		if _, err := run.Run(ctx, "yum", "-q", "info", "openlitespeed"); err != nil {
+			return apperr.Wrap(
+				apperr.CodeCommand,
+				"openlitespeed package is not available via yum repositories; configure the LiteSpeed repository manually",
+				err,
+			)
+		}
+	case platform.PackageManagerDNF:
+		if _, err := run.Run(ctx, "dnf", "-q", "info", "openlitespeed"); err != nil {
+			return apperr.Wrap(
+				apperr.CodeCommand,
+				"openlitespeed package is not available via dnf repositories; configure the LiteSpeed repository manually",
+				err,
+			)
+		}
 	default:
 		return apperr.New(apperr.CodePlatform, fmt.Sprintf("unsupported package manager: %s", info.PackageManager))
 	}
+	return nil
 }
 
 func (s SiteService) ensureDomainDoesNotExist(domain, vhostDir, serverConfigPath string) error {
@@ -1444,20 +1476,30 @@ func applyOwnershipRecursive(root string, uid, gid int) error {
 }
 
 func installWordPress(docRoot string) error {
-	const wpArchiveURL = "https://wordpress.org/latest.tar.gz"
-
-	client := &http.Client{Timeout: 2 * time.Minute}
-	resp, err := client.Get(wpArchiveURL)
+	tmp, err := os.CreateTemp("", "ols-wordpress-*.tar.gz")
 	if err != nil {
-		return apperr.Wrap(apperr.CodeCommand, "failed to download WordPress archive", err)
+		return apperr.Wrap(apperr.CodeConfig, "failed to prepare temporary WordPress archive", err)
 	}
-	defer resp.Body.Close()
+	archivePath := tmp.Name()
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(archivePath)
+		return apperr.Wrap(apperr.CodeConfig, "failed to initialize temporary WordPress archive", err)
+	}
+	defer func() {
+		_ = os.Remove(archivePath)
+	}()
 
-	if resp.StatusCode != http.StatusOK {
-		return apperr.New(apperr.CodeCommand, fmt.Sprintf("failed to download WordPress archive: http %d", resp.StatusCode))
+	if err := downloadFileWithSHA1Verification(wpArchiveURL, wpArchiveSHA1URL, archivePath); err != nil {
+		return err
 	}
 
-	gz, err := gzip.NewReader(resp.Body)
+	f, err := os.Open(archivePath)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeConfig, "failed to open verified WordPress archive", err)
+	}
+	defer f.Close()
+
+	gz, err := gzip.NewReader(f)
 	if err != nil {
 		return apperr.Wrap(apperr.CodeCommand, "failed to open WordPress archive", err)
 	}
@@ -1810,31 +1852,11 @@ func ensureWPCLIPhar(wpCLIPath string) error {
 		return nil
 	}
 
-	client := &http.Client{Timeout: 2 * time.Minute}
-	resp, err := client.Get(wpCLIPharURL)
-	if err != nil {
-		return apperr.Wrap(apperr.CodeCommand, "failed to download wp-cli phar", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return apperr.New(apperr.CodeCommand, fmt.Sprintf("failed to download wp-cli phar: http %d", resp.StatusCode))
-	}
-
 	if err := os.MkdirAll(filepath.Dir(wpCLIPath), 0o755); err != nil {
 		return apperr.Wrap(apperr.CodeConfig, "failed to prepare wp-cli target path", err)
 	}
-
-	f, err := os.OpenFile(wpCLIPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o755)
-	if err != nil {
-		return apperr.Wrap(apperr.CodeConfig, "failed to create wp-cli phar", err)
-	}
-	if _, err := io.Copy(f, resp.Body); err != nil {
-		_ = f.Close()
-		return apperr.Wrap(apperr.CodeConfig, "failed to write wp-cli phar", err)
-	}
-	if err := f.Close(); err != nil {
-		return apperr.Wrap(apperr.CodeConfig, "failed to finalize wp-cli phar", err)
+	if err := downloadFileWithSHA512Verification(wpCLIPharURL, wpCLIPharSHA512URL, wpCLIPath, 0o755); err != nil {
+		return err
 	}
 	return nil
 }
@@ -1843,7 +1865,7 @@ func (s SiteService) runWPCLI(ctx context.Context, phpPath, wpCLIPath string, ar
 	cmdArgs := append([]string{wpCLIPath}, args...)
 	res, err := s.runner.Run(ctx, phpPath, cmdArgs...)
 	if err != nil {
-		msg := strings.TrimSpace(strings.Join([]string{res.Stdout, res.Stderr}, "\n"))
+		msg := strings.TrimSpace(strings.Join([]string{sanitizeOutputSecrets(res.Stdout), sanitizeOutputSecrets(res.Stderr)}, "\n"))
 		if msg != "" {
 			return apperr.Wrap(apperr.CodeCommand, "wp-cli command failed: "+msg, err)
 		}
@@ -1958,4 +1980,166 @@ func packagesForInstall(phpVersion, databasePackage string) []string {
 
 func packagesForPHPUpdate(phpVersion string) []string {
 	return []string{"lsphp" + phpVersion, "lsphp" + phpVersion + "-mysql"}
+}
+
+func downloadText(url string) (string, error) {
+	client := &http.Client{Timeout: 2 * time.Minute}
+	resp, err := client.Get(url)
+	if err != nil {
+		return "", apperr.Wrap(apperr.CodeCommand, "failed to download remote text", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", apperr.New(apperr.CodeCommand, fmt.Sprintf("failed to download remote text: http %d", resp.StatusCode))
+	}
+
+	b, err := io.ReadAll(io.LimitReader(resp.Body, 32*1024))
+	if err != nil {
+		return "", apperr.Wrap(apperr.CodeCommand, "failed to read remote text", err)
+	}
+	return strings.TrimSpace(string(b)), nil
+}
+
+func parseExpectedHexDigest(raw string, minLen, maxLen int) (string, error) {
+	match := hexDigestPattern.FindString(strings.TrimSpace(raw))
+	if match == "" {
+		return "", apperr.New(apperr.CodeValidation, "no digest value found in checksum response")
+	}
+	digest := strings.ToLower(strings.TrimSpace(match))
+	if len(digest) < minLen || len(digest) > maxLen {
+		return "", apperr.New(apperr.CodeValidation, "invalid checksum length")
+	}
+	return digest, nil
+}
+
+func computeFileSHA1(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", apperr.Wrap(apperr.CodeConfig, "failed to open file for sha1", err)
+	}
+	defer f.Close()
+
+	h := sha1.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", apperr.Wrap(apperr.CodeConfig, "failed to hash file with sha1", err)
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+func computeFileSHA512(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", apperr.Wrap(apperr.CodeConfig, "failed to open file for sha512", err)
+	}
+	defer f.Close()
+
+	h := sha512.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", apperr.Wrap(apperr.CodeConfig, "failed to hash file with sha512", err)
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+func downloadToFile(url, destPath string, mode os.FileMode) error {
+	client := &http.Client{Timeout: 2 * time.Minute}
+	resp, err := client.Get(url)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeCommand, "failed to download file", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return apperr.New(apperr.CodeCommand, fmt.Sprintf("failed to download file: http %d", resp.StatusCode))
+	}
+
+	if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
+		return apperr.Wrap(apperr.CodeConfig, "failed to create destination directory", err)
+	}
+
+	tmp, err := os.CreateTemp(filepath.Dir(destPath), "ols-download-*")
+	if err != nil {
+		return apperr.Wrap(apperr.CodeConfig, "failed to create temporary download file", err)
+	}
+	tmpPath := tmp.Name()
+	defer func() {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+	}()
+
+	if _, err := io.Copy(tmp, io.LimitReader(resp.Body, 256*1024*1024)); err != nil {
+		return apperr.Wrap(apperr.CodeConfig, "failed to write downloaded file", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return apperr.Wrap(apperr.CodeConfig, "failed to finalize downloaded file", err)
+	}
+	if err := os.Chmod(tmpPath, mode); err != nil {
+		return apperr.Wrap(apperr.CodeConfig, "failed to set downloaded file permissions", err)
+	}
+	if err := os.Rename(tmpPath, destPath); err != nil {
+		return apperr.Wrap(apperr.CodeConfig, "failed to move downloaded file into place", err)
+	}
+	return nil
+}
+
+func downloadFileWithSHA1Verification(url, checksumURL, destPath string) error {
+	expectedRaw, err := downloadText(checksumURL)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeCommand, "failed to download WordPress checksum", err)
+	}
+	expected, err := parseExpectedHexDigest(expectedRaw, 40, 40)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeValidation, "invalid WordPress checksum response", err)
+	}
+
+	if err := downloadToFile(url, destPath, 0o644); err != nil {
+		return err
+	}
+	actual, err := computeFileSHA1(destPath)
+	if err != nil {
+		return err
+	}
+	if !strings.EqualFold(actual, expected) {
+		return apperr.New(apperr.CodeCommand, "WordPress archive checksum verification failed")
+	}
+	return nil
+}
+
+func downloadFileWithSHA512Verification(url, checksumURL, destPath string, mode os.FileMode) error {
+	expectedRaw, err := downloadText(checksumURL)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeCommand, "failed to download wp-cli checksum", err)
+	}
+	expected, err := parseExpectedHexDigest(expectedRaw, 128, 128)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeValidation, "invalid wp-cli checksum response", err)
+	}
+
+	if err := downloadToFile(url, destPath, mode); err != nil {
+		return err
+	}
+	actual, err := computeFileSHA512(destPath)
+	if err != nil {
+		return err
+	}
+	if !strings.EqualFold(actual, expected) {
+		return apperr.New(apperr.CodeCommand, "wp-cli phar checksum verification failed")
+	}
+	return nil
+}
+
+func sanitizeOutputSecrets(content string) string {
+	if strings.TrimSpace(content) == "" {
+		return content
+	}
+	res := content
+	patterns := []*regexp.Regexp{
+		regexp.MustCompile(`(?i)(--admin_password=)(\S+)`),
+		regexp.MustCompile(`(?i)(--dbpass=)(\S+)`),
+		regexp.MustCompile(`(?i)(password\s*[:=]\s*)(\S+)`),
+	}
+	for _, p := range patterns {
+		res = p.ReplaceAllString(res, `${1}<redacted>`)
+	}
+	return res
 }

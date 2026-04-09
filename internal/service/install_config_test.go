@@ -99,6 +99,25 @@ func TestResolveInstallPlanInvalidDatabase(t *testing.T) {
 	}
 }
 
+func TestResolveInstallPlanRejectsUnsafeSSLPaths(t *testing.T) {
+	_, err := resolveInstallPlan(
+		InstallOptions{
+			ConfigPath:   filepath.Join(t.TempDir(), "install.json"),
+			SSLCertFile:  "/etc/ssl/certs/server.crt\nmalicious 1",
+			SSLKeyFile:   "/etc/ssl/private/server.key",
+			HTTPPort:     80,
+			HTTPSPort:    443,
+			PHPVersion:   "85",
+			DatabaseEngine: "mariadb",
+		},
+		platform.Info{PackageManager: platform.PackageManagerAPT},
+		"/usr/local/lsws",
+	)
+	if err == nil {
+		t.Fatal("expected unsafe ssl path validation error")
+	}
+}
+
 func TestInstallRuntimeDryRunIncludesResolvedPlan(t *testing.T) {
 	r := &fakeRunner{}
 	svc := NewSiteService(

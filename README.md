@@ -6,14 +6,10 @@
 [![Release Status](https://github.com/Code-Egg/ols-cli/workflows/release/badge.svg)](https://github.com/Code-Egg/ols-cli/actions/workflows/release.yml)
 [![Go](https://img.shields.io/badge/Go-1.22+-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 [![Release](https://img.shields.io/github/v/release/Code-Egg/ols-cli?display_name=tag)](https://github.com/Code-Egg/ols-cli/releases)
-
-
-## Supported systems
-
-| Category | Supported |
-| --- | --- |
-| OS | Ubuntu, Debian, CentOS, AlmaLinux, Rocky Linux |
-| CPU Architecture | `amd64` (x86_64), `arm64` (aarch64) |
+[![CPU amd64](https://img.shields.io/badge/CPU-amd64_(x86__64)-5C2D91?logo=amd&logoColor=white)](https://en.wikipedia.org/wiki/X86-64)
+[![CPU arm64](https://img.shields.io/badge/CPU-arm64_(aarch64)-0091BD?logo=arm&logoColor=white)](https://en.wikipedia.org/wiki/AArch64)
+[![Ubuntu](https://img.shields.io/badge/OS-Ubuntu-E95420?logo=ubuntu&logoColor=white)](https://ubuntu.com/)
+[![CentOS](https://img.shields.io/badge/OS-CentOS-262577?logo=centos&logoColor=white)](https://www.centos.org/)
 
 ## Installation
 
