@@ -2,6 +2,7 @@ package service
 
 import (
 	"archive/tar"
+	"archive/zip"
 	"compress/gzip"
 	"context"
 	crand "crypto/rand"
@@ -40,6 +41,8 @@ const (
 	defaultLSWSRoot              = "/usr/local/lsws"
 	defaultWebRoot               = "/var/www"
 	defaultSecretsRoot           = "/etc/ols-cli/sites"
+	defaultOWASPCRSVersion       = "4.21.0"
+	defaultOWASPCRSDirName       = "owasp-modsecurity-crs"
 	defaultOWASPModSecRulesFile  = "/usr/local/lsws/conf/owasp/modsec_includes.conf"
 	defaultModSecurityModuleFile = "/usr/local/lsws/modules/mod_security.so"
 	wpArchiveURL                 = "https://wordpress.org/latest.tar.gz"
@@ -336,7 +339,7 @@ func (s SiteService) CreateSite(ctx context.Context, opts CreateSiteOptions) err
 	}
 
 	if boolPtrValue(opts.OWASPEnabled) {
-		if err := validateOWASPPrerequisites(defaultModSecurityModuleFile, defaultOWASPModSecRulesFile); err != nil {
+		if err := s.ensureOWASPPrerequisites(ctx, info); err != nil {
 			return err
 		}
 	}
@@ -522,7 +525,13 @@ func (s SiteService) UpdateSitePHP(ctx context.Context, opts UpdateSiteOptions) 
 	}
 
 	if boolPtrValue(opts.OWASPEnabled) {
-		if err := validateOWASPPrerequisites(defaultModSecurityModuleFile, defaultOWASPModSecRulesFile); err != nil {
+		if !phpRequested {
+			info, err = s.detector.Detect(ctx)
+			if err != nil {
+				return err
+			}
+		}
+		if err := s.ensureOWASPPrerequisites(ctx, info); err != nil {
 			return err
 		}
 	}
@@ -1299,14 +1308,285 @@ func enabledLabel(v bool) string {
 	return "disabled"
 }
 
-func validateOWASPPrerequisites(modulePath, rulesPath string) error {
-	if !fileExists(modulePath) {
-		return apperr.New(apperr.CodeValidation, fmt.Sprintf("ModSecurity module not found at %s; install ols-modsecurity first", modulePath))
+func owaspCRSArchiveURL(version string) string {
+	return fmt.Sprintf("https://github.com/coreruleset/coreruleset/archive/refs/tags/v%s.zip", strings.TrimSpace(version))
+}
+
+func (s SiteService) ensureOWASPPrerequisites(ctx context.Context, info platform.Info) error {
+	owaspCRSVersion, err := s.resolveOWASPCRSVersionFromConfig()
+	if err != nil {
+		s.console.Warn("Could not parse install config for OWASP CRS version; falling back to default " + defaultOWASPCRSVersion + ": " + err.Error())
+		owaspCRSVersion = defaultOWASPCRSVersion
 	}
-	if !fileExists(rulesPath) {
-		return apperr.New(apperr.CodeValidation, fmt.Sprintf("OWASP rules file not found at %s; enable OWASP rules before toggling vhost OWASP", rulesPath))
+
+	if !fileExists(defaultModSecurityModuleFile) {
+		s.console.Bullet("Installing ModSecurity module package: ols-modsecurity")
+		installer := platform.NewPackageInstaller(s.runner, info)
+		if err := installer.Install(ctx, "ols-modsecurity"); err != nil {
+			return apperr.Wrap(apperr.CodeCommand, "failed to install ols-modsecurity package", err)
+		}
+	}
+
+	if !fileExists(defaultModSecurityModuleFile) {
+		return apperr.New(apperr.CodeValidation, fmt.Sprintf("ModSecurity module not found at %s after installation attempt", defaultModSecurityModuleFile))
+	}
+
+	changed, err := ensureOWASPRulesBundle(defaultOWASPModSecRulesFile, owaspCRSVersion)
+	if err != nil {
+		return err
+	}
+	if changed {
+		s.console.Bullet("Prepared OWASP CRS rules bundle: " + defaultOWASPModSecRulesFile)
 	}
 	return nil
+}
+
+func (s SiteService) resolveOWASPCRSVersionFromConfig() (string, error) {
+	cfg, _, err := loadRuntimeInstallConfig("", s.lswsRoot)
+	if err != nil {
+		return "", err
+	}
+	version := strings.TrimSpace(cfg.OWASPCRSVersion)
+	if version == "" {
+		return defaultOWASPCRSVersion, nil
+	}
+	return version, nil
+}
+
+func ensureOWASPRulesBundle(rulesPath, crsVersion string) (bool, error) {
+	owaspDir := filepath.Dir(rulesPath)
+	crsDir := filepath.Join(owaspDir, defaultOWASPCRSDirName)
+	changed := false
+
+	if err := os.MkdirAll(owaspDir, 0o755); err != nil {
+		return false, apperr.Wrap(apperr.CodeConfig, "failed to create OWASP directory", err)
+	}
+
+	if !fileExists(filepath.Join(crsDir, "rules")) {
+		if err := installOWASPCRSBundle(owaspDir, crsDir, crsVersion); err != nil {
+			return false, err
+		}
+		changed = true
+	}
+
+	if err := promoteOWASPExampleFiles(crsDir); err != nil {
+		return false, err
+	}
+
+	rulesDir := filepath.Join(crsDir, "rules")
+	entries, err := os.ReadDir(rulesDir)
+	if err != nil {
+		return false, apperr.Wrap(apperr.CodeConfig, "failed to read OWASP rules directory", err)
+	}
+
+	ruleFiles := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := strings.TrimSpace(entry.Name())
+		if strings.HasPrefix(name, "REQUEST-") || strings.HasPrefix(name, "RESPONSE-") {
+			ruleFiles = append(ruleFiles, name)
+		}
+	}
+	if len(ruleFiles) == 0 {
+		return false, apperr.New(apperr.CodeConfig, fmt.Sprintf("no OWASP CRS REQUEST/RESPONSE rules found in %s", rulesDir))
+	}
+	sort.Strings(ruleFiles)
+
+	modsecPath := filepath.Join(owaspDir, "modsecurity.conf")
+	modsecChanged, err := writeFileIfChanged(modsecPath, []byte("SecRuleEngine On\n"), 0o644)
+	if err != nil {
+		return false, err
+	}
+	changed = changed || modsecChanged
+
+	var includes strings.Builder
+	includes.WriteString("include modsecurity.conf\n")
+	includes.WriteString("include " + defaultOWASPCRSDirName + "/crs-setup.conf\n")
+	for _, file := range ruleFiles {
+		includes.WriteString("include " + defaultOWASPCRSDirName + "/rules/" + file + "\n")
+	}
+	includesChanged, err := writeFileIfChanged(rulesPath, []byte(includes.String()), 0o644)
+	if err != nil {
+		return false, err
+	}
+	changed = changed || includesChanged
+
+	return changed, nil
+}
+
+func installOWASPCRSBundle(owaspDir, targetDir, crsVersion string) error {
+	tmp, err := os.CreateTemp("", "ols-owasp-crs-*.zip")
+	if err != nil {
+		return apperr.Wrap(apperr.CodeConfig, "failed to create temporary OWASP archive path", err)
+	}
+	archivePath := tmp.Name()
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(archivePath)
+		return apperr.Wrap(apperr.CodeConfig, "failed to initialize temporary OWASP archive", err)
+	}
+	defer func() {
+		_ = os.Remove(archivePath)
+	}()
+
+	if err := downloadToFile(owaspCRSArchiveURL(crsVersion), archivePath, 0o644); err != nil {
+		return apperr.Wrap(apperr.CodeCommand, "failed to download OWASP CRS archive", err)
+	}
+
+	extractedRoot, err := extractZipArchive(archivePath, owaspDir)
+	if err != nil {
+		return err
+	}
+	if extractedRoot == "" {
+		return apperr.New(apperr.CodeConfig, "OWASP CRS archive extraction produced no root directory")
+	}
+
+	sourceDir := filepath.Join(owaspDir, extractedRoot)
+	if !fileExists(sourceDir) {
+		return apperr.New(apperr.CodeConfig, fmt.Sprintf("expected extracted OWASP directory %s was not found", sourceDir))
+	}
+
+	if fileExists(targetDir) {
+		if err := os.RemoveAll(targetDir); err != nil {
+			return apperr.Wrap(apperr.CodeConfig, "failed to remove existing OWASP CRS directory", err)
+		}
+	}
+
+	if strings.EqualFold(filepath.Clean(sourceDir), filepath.Clean(targetDir)) {
+		return nil
+	}
+
+	if err := os.Rename(sourceDir, targetDir); err != nil {
+		return apperr.Wrap(apperr.CodeConfig, "failed to place OWASP CRS directory", err)
+	}
+	return nil
+}
+
+func extractZipArchive(zipPath, destDir string) (string, error) {
+	reader, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return "", apperr.Wrap(apperr.CodeConfig, "failed to open OWASP CRS archive", err)
+	}
+	defer reader.Close()
+
+	cleanDest := filepath.Clean(destDir)
+	topRoot := ""
+
+	for _, file := range reader.File {
+		archiveName := strings.ReplaceAll(strings.TrimSpace(file.Name), "\\", "/")
+		if archiveName == "" {
+			continue
+		}
+
+		rel := path.Clean(strings.TrimPrefix(archiveName, "/"))
+		if rel == "." || rel == "" {
+			continue
+		}
+		if strings.HasPrefix(rel, "../") || rel == ".." {
+			return "", apperr.New(apperr.CodeConfig, "unsafe OWASP archive path detected")
+		}
+
+		parts := strings.Split(rel, "/")
+		if topRoot == "" && len(parts) > 0 {
+			topRoot = parts[0]
+		}
+
+		target := filepath.Join(cleanDest, filepath.FromSlash(rel))
+		cleanTarget := filepath.Clean(target)
+		if cleanTarget != cleanDest && !strings.HasPrefix(cleanTarget, cleanDest+string(os.PathSeparator)) {
+			return "", apperr.New(apperr.CodeConfig, "unsafe OWASP archive extraction target detected")
+		}
+
+		if file.FileInfo().IsDir() {
+			if err := os.MkdirAll(cleanTarget, 0o755); err != nil {
+				return "", apperr.Wrap(apperr.CodeConfig, "failed to create OWASP extracted directory", err)
+			}
+			continue
+		}
+
+		if err := os.MkdirAll(filepath.Dir(cleanTarget), 0o755); err != nil {
+			return "", apperr.Wrap(apperr.CodeConfig, "failed to create OWASP extracted file directory", err)
+		}
+
+		mode := file.Mode()
+		if mode == 0 {
+			mode = 0o644
+		}
+
+		in, err := file.Open()
+		if err != nil {
+			return "", apperr.Wrap(apperr.CodeConfig, "failed to open OWASP archive entry", err)
+		}
+		out, err := os.OpenFile(cleanTarget, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
+		if err != nil {
+			_ = in.Close()
+			return "", apperr.Wrap(apperr.CodeConfig, "failed to create OWASP extracted file", err)
+		}
+		if _, err := io.Copy(out, in); err != nil {
+			_ = in.Close()
+			_ = out.Close()
+			return "", apperr.Wrap(apperr.CodeConfig, "failed to write OWASP extracted file", err)
+		}
+		if err := in.Close(); err != nil {
+			_ = out.Close()
+			return "", apperr.Wrap(apperr.CodeConfig, "failed to close OWASP archive entry", err)
+		}
+		if err := out.Close(); err != nil {
+			return "", apperr.Wrap(apperr.CodeConfig, "failed to finalize OWASP extracted file", err)
+		}
+	}
+
+	return topRoot, nil
+}
+
+func promoteOWASPExampleFiles(crsDir string) error {
+	replacements := []struct {
+		example string
+		target  string
+	}{
+		{
+			example: filepath.Join(crsDir, "rules", "REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf.example"),
+			target:  filepath.Join(crsDir, "rules", "REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf"),
+		},
+		{
+			example: filepath.Join(crsDir, "rules", "RESPONSE-999-EXCLUSION-RULES-AFTER-CRS.conf.example"),
+			target:  filepath.Join(crsDir, "rules", "RESPONSE-999-EXCLUSION-RULES-AFTER-CRS.conf"),
+		},
+		{
+			example: filepath.Join(crsDir, "crs-setup.conf.example"),
+			target:  filepath.Join(crsDir, "crs-setup.conf"),
+		},
+	}
+
+	for _, item := range replacements {
+		if fileExists(item.target) || !fileExists(item.example) {
+			continue
+		}
+		if err := os.Rename(item.example, item.target); err != nil {
+			return apperr.Wrap(apperr.CodeConfig, "failed to promote OWASP example file", err)
+		}
+	}
+	return nil
+}
+
+func writeFileIfChanged(path string, content []byte, mode os.FileMode) (bool, error) {
+	existing, err := os.ReadFile(path)
+	if err == nil {
+		if string(existing) == string(content) {
+			return false, nil
+		}
+	} else if !os.IsNotExist(err) {
+		return false, apperr.Wrap(apperr.CodeConfig, "failed to read file for update check", err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return false, apperr.Wrap(apperr.CodeConfig, "failed to create directory for file write", err)
+	}
+	if err := os.WriteFile(path, content, mode); err != nil {
+		return false, apperr.Wrap(apperr.CodeConfig, "failed to write file", err)
+	}
+	return true, nil
 }
 
 func isTruthyDirectiveValue(v string) bool {

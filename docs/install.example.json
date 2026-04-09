@@ -5,5 +5,6 @@
   "http_port": 80,
   "https_port": 443,
   "ssl_cert_file": "/usr/local/lsws/admin/conf/webadmin.crt",
-  "ssl_key_file": "/usr/local/lsws/admin/conf/webadmin.key"
+  "ssl_key_file": "/usr/local/lsws/admin/conf/webadmin.key",
+  "owasp_crs_version": "4.21.0"
 }

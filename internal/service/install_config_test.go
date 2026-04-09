@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -34,6 +35,9 @@ func TestResolveInstallPlanDefaults(t *testing.T) {
 	}
 	if plan.HTTPPort != 80 || plan.HTTPSPort != 443 {
 		t.Fatalf("expected default ports 80/443, got %d/%d", plan.HTTPPort, plan.HTTPSPort)
+	}
+	if plan.OWASPCRSVersion != defaultOWASPCRSVersion {
+		t.Fatalf("expected default owasp crs version %s, got %s", defaultOWASPCRSVersion, plan.OWASPCRSVersion)
 	}
 }
 
@@ -74,6 +78,31 @@ func TestResolveInstallPlanOverrides(t *testing.T) {
 	}
 }
 
+func TestLoadRuntimeInstallConfigIncludesOWASPCRSVersion(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "install.json")
+	content := `{
+  "php_version": "85",
+  "database": "mariadb",
+  "configure_listeners": true,
+  "http_port": 80,
+  "https_port": 443,
+  "ssl_cert_file": "/usr/local/lsws/admin/conf/webadmin.crt",
+  "ssl_key_file": "/usr/local/lsws/admin/conf/webadmin.key",
+  "owasp_crs_version": "4.22.0"
+}`
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, _, err := loadRuntimeInstallConfig(configPath, "/usr/local/lsws")
+	if err != nil {
+		t.Fatalf("unexpected load error: %v", err)
+	}
+	if cfg.OWASPCRSVersion != "4.22.0" {
+		t.Fatalf("expected owasp_crs_version 4.22.0, got %s", cfg.OWASPCRSVersion)
+	}
+}
+
 func TestResolveInstallPlanDatabaseNone(t *testing.T) {
 	plan, err := resolveInstallPlan(
 		InstallOptions{ConfigPath: filepath.Join(t.TempDir(), "install.json"), DatabaseEngine: "none"},
@@ -102,12 +131,12 @@ func TestResolveInstallPlanInvalidDatabase(t *testing.T) {
 func TestResolveInstallPlanRejectsUnsafeSSLPaths(t *testing.T) {
 	_, err := resolveInstallPlan(
 		InstallOptions{
-			ConfigPath:   filepath.Join(t.TempDir(), "install.json"),
-			SSLCertFile:  "/etc/ssl/certs/server.crt\nmalicious 1",
-			SSLKeyFile:   "/etc/ssl/private/server.key",
-			HTTPPort:     80,
-			HTTPSPort:    443,
-			PHPVersion:   "85",
+			ConfigPath:     filepath.Join(t.TempDir(), "install.json"),
+			SSLCertFile:    "/etc/ssl/certs/server.crt\nmalicious 1",
+			SSLKeyFile:     "/etc/ssl/private/server.key",
+			HTTPPort:       80,
+			HTTPSPort:      443,
+			PHPVersion:     "85",
 			DatabaseEngine: "mariadb",
 		},
 		platform.Info{PackageManager: platform.PackageManagerAPT},
@@ -134,4 +163,3 @@ func TestInstallRuntimeDryRunIncludesResolvedPlan(t *testing.T) {
 		t.Fatalf("expected no runner calls in dry-run, got %d", len(r.calls))
 	}
 }
-

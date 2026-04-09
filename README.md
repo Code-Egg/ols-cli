@@ -141,6 +141,8 @@ sudo cp docs/install.example.json /etc/ols-cli/install.json
 sudo ols install
 ```
 
+`install.json` also supports `owasp_crs_version` (for example, `"owasp_crs_version": "4.21.0"`), which is used when enabling OWASP via `site create/update --enable-owasp`.
+
 Override config values with flags when needed:
 
 ```bash

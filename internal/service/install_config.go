@@ -24,6 +24,7 @@ type RuntimeInstallConfig struct {
 	HTTPSPort          int    `json:"https_port"`
 	SSLCertFile        string `json:"ssl_cert_file"`
 	SSLKeyFile         string `json:"ssl_key_file"`
+	OWASPCRSVersion    string `json:"owasp_crs_version"`
 }
 
 type resolvedInstallPlan struct {
@@ -36,6 +37,7 @@ type resolvedInstallPlan struct {
 	HTTPSPort          int
 	SSLCertFile        string
 	SSLKeyFile         string
+	OWASPCRSVersion    string
 }
 
 func defaultRuntimeInstallConfig(lswsRoot string) RuntimeInstallConfig {
@@ -48,6 +50,7 @@ func defaultRuntimeInstallConfig(lswsRoot string) RuntimeInstallConfig {
 		HTTPSPort:          443,
 		SSLCertFile:        filepath.Join(lswsRoot, "admin", "conf", "webadmin.crt"),
 		SSLKeyFile:         filepath.Join(lswsRoot, "admin", "conf", "webadmin.key"),
+		OWASPCRSVersion:    defaultOWASPCRSVersion,
 	}
 }
 
@@ -106,6 +109,9 @@ func mergeRuntimeInstallConfig(base, override RuntimeInstallConfig) RuntimeInsta
 	if v := strings.TrimSpace(override.SSLKeyFile); v != "" {
 		base.SSLKeyFile = v
 	}
+	if v := strings.TrimSpace(override.OWASPCRSVersion); v != "" {
+		base.OWASPCRSVersion = v
+	}
 	return base
 }
 
@@ -162,6 +168,10 @@ func resolveInstallPlan(opts InstallOptions, info platform.Info, lswsRoot string
 	if v := strings.TrimSpace(opts.SSLKeyFile); v != "" {
 		sslKeyFile = v
 	}
+	owaspCRSVersion := strings.TrimSpace(cfg.OWASPCRSVersion)
+	if owaspCRSVersion == "" {
+		owaspCRSVersion = defaultOWASPCRSVersion
+	}
 
 	if err := validatePort(httpPort, "http_port"); err != nil {
 		return resolvedInstallPlan{}, err
@@ -194,6 +204,7 @@ func resolveInstallPlan(opts InstallOptions, info platform.Info, lswsRoot string
 		HTTPSPort:          httpsPort,
 		SSLCertFile:        sslCertFile,
 		SSLKeyFile:         sslKeyFile,
+		OWASPCRSVersion:    owaspCRSVersion,
 	}, nil
 }
 
