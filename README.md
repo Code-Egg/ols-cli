@@ -36,7 +36,7 @@ sudo ols install
 sudo ols site create example.com --wp --le
 ```
 
-### Create a site with defaults (WordPress + PHP 8.5)
+### Create a wordprss site with default PHP version
 
 ```bash
 sudo ols site create example.com --wp
