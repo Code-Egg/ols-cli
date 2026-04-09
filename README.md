@@ -14,76 +14,26 @@
 
 ## Installation
 
-Use the one-line installer:
+Use the one-line installer to install ols cli binary:
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/Code-Egg/ols-cli/master/install_olscli.sh)
 ```
 
+### Install runtime once
+
+Install OpenLiteSpeed, PHP, Database. 
+
+```bash
+sudo ols install
+```
+
 ## Usage
-
-This section now provides:
-- a quick command overview table
-- a dedicated `ols site` subcommand/option table
-- practical examples underneath
-
-### Command overview
-
-| Command | Purpose | Common options |
-| --- | --- | --- |
-| `ols install` | Install/align OpenLiteSpeed runtime and related packages | `--php81` `--php82` `--php83` `--php84` `--php85` `--database` `--config` `--http-port` `--https-port` `--ssl-cert` `--ssl-key` `--no-listeners` |
-| `ols site create <domain>` | Create a new site/vhost | `--wp` `--le` `--php81` `--php82` `--php83` `--php84` `--php85` |
-| `ols site update <domain>` | Update an existing site (PHP target is required) | `--wp` `--php81` `--php82` `--php83` `--php84` `--php85` |
-| `ols site info <domain>` | Show site metadata and detected status | *(none)* |
-| `ols site show <domain>` | Print OLS virtual host config (`vhconf.conf`) | *(none)* |
-| `ols site list` | List managed sites discovered from OLS vhost directory | *(none)* |
-| `ols site delete <domain>` | Remove site config/files and optionally keep DB | `--keep-db` |
-
-Global options (apply to all commands): `--dry-run`, `--color`
-
-### `ols site` subcommands and options
-
-| Subcommand | Syntax | Options |
-| --- | --- | --- |
-| `create` | `ols site create <domain>` | `--wp` `--le` `--php81` `--php82` `--php83` `--php84` `--php85` |
-| `update` | `ols site update <domain>` | `--wp` and exactly one of `--php81` `--php82` `--php83` `--php84` `--php85` |
-| `info` | `ols site info <domain>` | *(none)* |
-| `show` | `ols site show <domain>` | *(none)* |
-| `list` | `ols site list` | *(none)* |
-| `delete` | `ols site delete <domain>` | `--keep-db` |
-
-### Install runtime once (required before provisioning)
-
-```bash
-sudo ols install
-```
-
-You can switch database engine:
-
-```bash
-sudo ols install --php83 --database mysql
-sudo ols install --php85 --database none
-```
-
-Use config file defaults (recommended for first-run bootstrap):
-
-```bash
-sudo mkdir -p /etc/ols-cli
-sudo cp docs/install.example.json /etc/ols-cli/install.json
-sudo ols install
-```
-
-Override config values with flags when needed:
-
-```bash
-sudo ols install --config /etc/ols-cli/install.json --php85 --database mysql --http-port 80 --https-port 443
-sudo ols install --no-listeners
-```
 
 ### Create a site with WordPress + Let's Encrypt
 
 ```bash
-sudo ols site create example.com --wp --le --php85
+sudo ols site create example.com --wp --le
 ```
 
 ### Create a site with defaults (WordPress + PHP 8.5)
@@ -96,12 +46,6 @@ sudo ols site create example.com --wp
 
 ```bash
 sudo ols site update example.com --php85
-```
-
-### Update a site and ensure WordPress + LiteSpeed Cache exist
-
-```bash
-sudo ols site update example.com --wp --php83
 ```
 
 ### Show site information
@@ -132,6 +76,33 @@ ols --dry-run site show example.com
 ols --dry-run site list
 ```
 
+## Command overview
+
+| Command | Purpose | Common options |
+| --- | --- | --- |
+| `ols install` | Install/align OpenLiteSpeed runtime and related packages | `--php81` `--php82` `--php83` `--php84` `--php85` `--database` `--config` `--http-port` `--https-port` `--ssl-cert` `--ssl-key` `--no-listeners` |
+| `ols site create <domain>` | Create a new site/vhost | `--wp` `--le` `--php81` `--php82` `--php83` `--php84` `--php85` |
+| `ols site update <domain>` | Update an existing site (PHP target is required) | `--wp` `--php81` `--php82` `--php83` `--php84` `--php85` |
+| `ols site info <domain>` | Show site metadata and detected status | *(none)* |
+| `ols site show <domain>` | Print OLS virtual host config (`vhconf.conf`) | *(none)* |
+| `ols site list` | List managed sites discovered from OLS vhost directory | *(none)* |
+| `ols site delete <domain>` | Remove site config/files and optionally keep DB | `--keep-db` |
+
+Global options (apply to all commands): `--dry-run`, `--color`
+
+
+`ols site` subcommands and options
+
+| Subcommand | Syntax | Options |
+| --- | --- | --- |
+| `create` | `ols site create <domain>` | `--wp` `--le` `--php81` `--php82` `--php83` `--php84` `--php85` |
+| `update` | `ols site update <domain>` | `--wp` and exactly one of `--php81` `--php82` `--php83` `--php84` `--php85` |
+| `info` | `ols site info <domain>` | *(none)* |
+| `show` | `ols site show <domain>` | *(none)* |
+| `list` | `ols site list` | *(none)* |
+| `delete` | `ols site delete <domain>` | `--keep-db` |
+
+
 ## Development
 
 ### Build locally
@@ -150,4 +121,23 @@ For verbose output:
 
 ```bash
 go test -v ./...
+```
+
+
+## FAQ
+
+#### Custom the default config file
+Use config file defaults (recommended for first-run bootstrap):
+
+```bash
+sudo mkdir -p /etc/ols-cli
+sudo cp docs/install.example.json /etc/ols-cli/install.json
+sudo ols install
+```
+
+Override config values with flags when needed:
+
+```bash
+sudo ols install --config /etc/ols-cli/install.json --php85 --database mysql --http-port 80 --https-port 443
+sudo ols install --no-listeners
 ```
