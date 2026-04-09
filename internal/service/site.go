@@ -48,6 +48,8 @@ const (
 	defaultVHRecaptchaReqLimit   = 500
 	defaultOWASPModSecRulesFile  = "/usr/local/lsws/conf/owasp/modsec_includes.conf"
 	defaultModSecurityModuleFile = "/usr/local/lsws/modules/mod_security.so"
+	defaultLiteSpeedRepoScript   = "https://repo.litespeed.sh"
+	defaultRepoScriptTempPath    = "/tmp/ols-cli-litespeed-repo.sh"
 	wpArchiveURL                 = "https://wordpress.org/latest.tar.gz"
 	wpArchiveSHA1URL             = "https://wordpress.org/latest.tar.gz.sha1"
 	wpCLIPharURL                 = "https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar"
@@ -967,9 +969,35 @@ func upsertINIValue(content, key, value string) (string, bool) {
 }
 
 func (s SiteService) configureLiteSpeedRepo(ctx context.Context, info platform.Info) error {
-	s.console.Bullet("Using hardened mode: repository bootstrap scripts are disabled")
-	if err := verifyLiteSpeedPackageAvailability(ctx, s.runner, info); err != nil {
+	if err := verifyLiteSpeedPackageAvailability(ctx, s.runner, info); err == nil {
+		s.console.Bullet("LiteSpeed package repository is already configured")
+		return nil
+	}
+	s.console.Bullet("Configuring LiteSpeed package repository")
+	if err := s.bootstrapLiteSpeedRepo(ctx); err != nil {
 		return err
+	}
+	if err := verifyLiteSpeedPackageAvailability(ctx, s.runner, info); err != nil {
+		return apperr.Wrap(
+			apperr.CodeCommand,
+			"LiteSpeed repository bootstrap completed but openlitespeed is still unavailable",
+			err,
+		)
+	}
+	s.console.Bullet("LiteSpeed package repository configured")
+	return nil
+}
+
+func (s SiteService) bootstrapLiteSpeedRepo(ctx context.Context) error {
+	if err := downloadToFile(defaultLiteSpeedRepoScript, defaultRepoScriptTempPath, 0o700); err != nil {
+		return apperr.Wrap(apperr.CodeCommand, "failed to download LiteSpeed repository bootstrap script", err)
+	}
+	defer func() {
+		_ = os.Remove(defaultRepoScriptTempPath)
+	}()
+
+	if _, err := s.runner.Run(ctx, "bash", defaultRepoScriptTempPath); err != nil {
+		return apperr.Wrap(apperr.CodeCommand, "failed to execute LiteSpeed repository bootstrap script", err)
 	}
 	return nil
 }
@@ -980,7 +1008,7 @@ func verifyLiteSpeedPackageAvailability(ctx context.Context, run runner.Runner, 
 		if _, err := run.Run(ctx, "apt-cache", "show", "openlitespeed"); err != nil {
 			return apperr.Wrap(
 				apperr.CodeCommand,
-				"openlitespeed package is not available via apt repositories; configure the LiteSpeed repository manually",
+				"openlitespeed package is not available via apt repositories",
 				err,
 			)
 		}
@@ -988,7 +1016,7 @@ func verifyLiteSpeedPackageAvailability(ctx context.Context, run runner.Runner, 
 		if _, err := run.Run(ctx, "yum", "-q", "info", "openlitespeed"); err != nil {
 			return apperr.Wrap(
 				apperr.CodeCommand,
-				"openlitespeed package is not available via yum repositories; configure the LiteSpeed repository manually",
+				"openlitespeed package is not available via yum repositories",
 				err,
 			)
 		}
@@ -996,7 +1024,7 @@ func verifyLiteSpeedPackageAvailability(ctx context.Context, run runner.Runner, 
 		if _, err := run.Run(ctx, "dnf", "-q", "info", "openlitespeed"); err != nil {
 			return apperr.Wrap(
 				apperr.CodeCommand,
-				"openlitespeed package is not available via dnf repositories; configure the LiteSpeed repository manually",
+				"openlitespeed package is not available via dnf repositories",
 				err,
 			)
 		}

@@ -148,14 +148,15 @@ func newSiteCreateCmd(svc siteManager, rootOpts *rootOptions) *cobra.Command {
 		},
 	}
 
+	cmd.Flags().SortFlags = false
 	cmd.Flags().BoolVar(&withWordPress, "wp", false, "install WordPress with required dependencies")
 	cmd.Flags().BoolVar(&withLE, "le", false, "configure Let's Encrypt certificate")
+	addPHPVersionFlags(cmd, php)
 	cmd.Flags().BoolVar(&owasp.enable, "enable-owasp", false, "enable OWASP ModSecurity at virtual host level")
-	cmd.Flags().BoolVar(&owasp.disable, "disable-owasp", false, "disable OWASP ModSecurity at virtual host level")
 	cmd.Flags().BoolVar(&recaptcha.enable, "enable-recaptcha", false, "enable reCAPTCHA at virtual host level")
+	cmd.Flags().BoolVar(&owasp.disable, "disable-owasp", false, "disable OWASP ModSecurity at virtual host level")
 	cmd.Flags().BoolVar(&recaptcha.disable, "disable-recaptcha", false, "disable reCAPTCHA at virtual host level")
 	cmd.Flags().BoolVar(&withHSTS, "hsts", false, "add recommended security extra headers to static context /")
-	addPHPVersionFlags(cmd, php)
 	return cmd
 }
 
@@ -209,13 +210,14 @@ func newSiteUpdateCmd(svc siteManager, rootOpts *rootOptions) *cobra.Command {
 		},
 	}
 
+	cmd.Flags().SortFlags = false
 	cmd.Flags().BoolVar(&withWordPress, "wp", false, "ensure WordPress and LiteSpeed Cache plugin are present")
+	addPHPVersionFlags(cmd, php)
 	cmd.Flags().BoolVar(&owasp.enable, "enable-owasp", false, "enable OWASP ModSecurity at virtual host level")
-	cmd.Flags().BoolVar(&owasp.disable, "disable-owasp", false, "disable OWASP ModSecurity at virtual host level")
 	cmd.Flags().BoolVar(&recaptcha.enable, "enable-recaptcha", false, "enable reCAPTCHA at virtual host level")
+	cmd.Flags().BoolVar(&owasp.disable, "disable-owasp", false, "disable OWASP ModSecurity at virtual host level")
 	cmd.Flags().BoolVar(&recaptcha.disable, "disable-recaptcha", false, "disable reCAPTCHA at virtual host level")
 	cmd.Flags().BoolVar(&withHSTS, "hsts", false, "add recommended security extra headers to static context /")
-	addPHPVersionFlags(cmd, php)
 	return cmd
 }
 
