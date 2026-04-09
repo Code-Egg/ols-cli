@@ -39,6 +39,12 @@ func TestResolveInstallPlanDefaults(t *testing.T) {
 	if plan.OWASPCRSVersion != defaultOWASPCRSVersion {
 		t.Fatalf("expected default owasp crs version %s, got %s", defaultOWASPCRSVersion, plan.OWASPCRSVersion)
 	}
+	if plan.VHRecaptchaType != defaultVHRecaptchaType {
+		t.Fatalf("expected default vh recaptcha type %d, got %d", defaultVHRecaptchaType, plan.VHRecaptchaType)
+	}
+	if plan.VHRecaptchaReqLimit != defaultVHRecaptchaReqLimit {
+		t.Fatalf("expected default vh recaptcha request limit %d, got %d", defaultVHRecaptchaReqLimit, plan.VHRecaptchaReqLimit)
+	}
 }
 
 func TestResolveInstallPlanOverrides(t *testing.T) {
@@ -88,7 +94,9 @@ func TestLoadRuntimeInstallConfigIncludesOWASPCRSVersion(t *testing.T) {
   "https_port": 443,
   "ssl_cert_file": "/usr/local/lsws/admin/conf/webadmin.crt",
   "ssl_key_file": "/usr/local/lsws/admin/conf/webadmin.key",
-  "owasp_crs_version": "4.22.0"
+  "owasp_crs_version": "4.22.0",
+  "vh_recaptcha_type": 2,
+  "vh_recaptcha_reg_conn_limit": 650
 }`
 	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -100,6 +108,12 @@ func TestLoadRuntimeInstallConfigIncludesOWASPCRSVersion(t *testing.T) {
 	}
 	if cfg.OWASPCRSVersion != "4.22.0" {
 		t.Fatalf("expected owasp_crs_version 4.22.0, got %s", cfg.OWASPCRSVersion)
+	}
+	if cfg.VHRecaptchaType != 2 {
+		t.Fatalf("expected vh_recaptcha_type 2, got %d", cfg.VHRecaptchaType)
+	}
+	if cfg.VHRecaptchaReqLimit != 650 {
+		t.Fatalf("expected vh_recaptcha_reg_conn_limit 650, got %d", cfg.VHRecaptchaReqLimit)
 	}
 }
 

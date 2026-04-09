@@ -17,40 +17,46 @@ import (
 const defaultInstallConfigPath = "/etc/ols-cli/install.json"
 
 type RuntimeInstallConfig struct {
-	PHPVersion         string `json:"php_version"`
-	DatabaseEngine     string `json:"database"`
-	ConfigureListeners *bool  `json:"configure_listeners,omitempty"`
-	HTTPPort           int    `json:"http_port"`
-	HTTPSPort          int    `json:"https_port"`
-	SSLCertFile        string `json:"ssl_cert_file"`
-	SSLKeyFile         string `json:"ssl_key_file"`
-	OWASPCRSVersion    string `json:"owasp_crs_version"`
+	PHPVersion          string `json:"php_version"`
+	DatabaseEngine      string `json:"database"`
+	ConfigureListeners  *bool  `json:"configure_listeners,omitempty"`
+	HTTPPort            int    `json:"http_port"`
+	HTTPSPort           int    `json:"https_port"`
+	SSLCertFile         string `json:"ssl_cert_file"`
+	SSLKeyFile          string `json:"ssl_key_file"`
+	OWASPCRSVersion     string `json:"owasp_crs_version"`
+	VHRecaptchaType     int    `json:"vh_recaptcha_type"`
+	VHRecaptchaReqLimit int    `json:"vh_recaptcha_reg_conn_limit"`
 }
 
 type resolvedInstallPlan struct {
-	ConfigPath         string
-	PHPVersion         string
-	DatabaseEngine     string
-	DatabasePackage    string
-	ConfigureListeners bool
-	HTTPPort           int
-	HTTPSPort          int
-	SSLCertFile        string
-	SSLKeyFile         string
-	OWASPCRSVersion    string
+	ConfigPath          string
+	PHPVersion          string
+	DatabaseEngine      string
+	DatabasePackage     string
+	ConfigureListeners  bool
+	HTTPPort            int
+	HTTPSPort           int
+	SSLCertFile         string
+	SSLKeyFile          string
+	OWASPCRSVersion     string
+	VHRecaptchaType     int
+	VHRecaptchaReqLimit int
 }
 
 func defaultRuntimeInstallConfig(lswsRoot string) RuntimeInstallConfig {
 	enabled := true
 	return RuntimeInstallConfig{
-		PHPVersion:         "85",
-		DatabaseEngine:     "mariadb",
-		ConfigureListeners: &enabled,
-		HTTPPort:           80,
-		HTTPSPort:          443,
-		SSLCertFile:        filepath.Join(lswsRoot, "admin", "conf", "webadmin.crt"),
-		SSLKeyFile:         filepath.Join(lswsRoot, "admin", "conf", "webadmin.key"),
-		OWASPCRSVersion:    defaultOWASPCRSVersion,
+		PHPVersion:          "85",
+		DatabaseEngine:      "mariadb",
+		ConfigureListeners:  &enabled,
+		HTTPPort:            80,
+		HTTPSPort:           443,
+		SSLCertFile:         filepath.Join(lswsRoot, "admin", "conf", "webadmin.crt"),
+		SSLKeyFile:          filepath.Join(lswsRoot, "admin", "conf", "webadmin.key"),
+		OWASPCRSVersion:     defaultOWASPCRSVersion,
+		VHRecaptchaType:     defaultVHRecaptchaType,
+		VHRecaptchaReqLimit: defaultVHRecaptchaReqLimit,
 	}
 }
 
@@ -112,6 +118,12 @@ func mergeRuntimeInstallConfig(base, override RuntimeInstallConfig) RuntimeInsta
 	if v := strings.TrimSpace(override.OWASPCRSVersion); v != "" {
 		base.OWASPCRSVersion = v
 	}
+	if override.VHRecaptchaType > 0 {
+		base.VHRecaptchaType = override.VHRecaptchaType
+	}
+	if override.VHRecaptchaReqLimit > 0 {
+		base.VHRecaptchaReqLimit = override.VHRecaptchaReqLimit
+	}
 	return base
 }
 
@@ -172,6 +184,14 @@ func resolveInstallPlan(opts InstallOptions, info platform.Info, lswsRoot string
 	if owaspCRSVersion == "" {
 		owaspCRSVersion = defaultOWASPCRSVersion
 	}
+	vhRecaptchaType := cfg.VHRecaptchaType
+	if vhRecaptchaType <= 0 {
+		vhRecaptchaType = defaultVHRecaptchaType
+	}
+	vhRecaptchaReqLimit := cfg.VHRecaptchaReqLimit
+	if vhRecaptchaReqLimit <= 0 {
+		vhRecaptchaReqLimit = defaultVHRecaptchaReqLimit
+	}
 
 	if err := validatePort(httpPort, "http_port"); err != nil {
 		return resolvedInstallPlan{}, err
@@ -195,16 +215,18 @@ func resolveInstallPlan(opts InstallOptions, info platform.Info, lswsRoot string
 	}
 
 	return resolvedInstallPlan{
-		ConfigPath:         cfgPath,
-		PHPVersion:         phpVersion,
-		DatabaseEngine:     dbEngine,
-		DatabasePackage:    dbPackage,
-		ConfigureListeners: configureListeners,
-		HTTPPort:           httpPort,
-		HTTPSPort:          httpsPort,
-		SSLCertFile:        sslCertFile,
-		SSLKeyFile:         sslKeyFile,
-		OWASPCRSVersion:    owaspCRSVersion,
+		ConfigPath:          cfgPath,
+		PHPVersion:          phpVersion,
+		DatabaseEngine:      dbEngine,
+		DatabasePackage:     dbPackage,
+		ConfigureListeners:  configureListeners,
+		HTTPPort:            httpPort,
+		HTTPSPort:           httpsPort,
+		SSLCertFile:         sslCertFile,
+		SSLKeyFile:          sslKeyFile,
+		OWASPCRSVersion:     owaspCRSVersion,
+		VHRecaptchaType:     vhRecaptchaType,
+		VHRecaptchaReqLimit: vhRecaptchaReqLimit,
 	}, nil
 }
 

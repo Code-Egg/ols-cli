@@ -43,6 +43,9 @@ const (
 	defaultSecretsRoot           = "/etc/ols-cli/sites"
 	defaultOWASPCRSVersion       = "4.21.0"
 	defaultOWASPCRSDirName       = "owasp-modsecurity-crs"
+	defaultServerRecaptchaType   = 0
+	defaultVHRecaptchaType       = 1
+	defaultVHRecaptchaReqLimit   = 500
 	defaultOWASPModSecRulesFile  = "/usr/local/lsws/conf/owasp/modsec_includes.conf"
 	defaultModSecurityModuleFile = "/usr/local/lsws/modules/mod_security.so"
 	wpArchiveURL                 = "https://wordpress.org/latest.tar.gz"
@@ -170,6 +173,8 @@ func (s SiteService) InstallRuntime(ctx context.Context, opts InstallOptions) er
 	s.console.Bullet("Config: " + plan.ConfigPath)
 	s.console.Bullet("PHP: lsphp" + plan.PHPVersion)
 	s.console.Bullet("Database: " + plan.DatabaseEngine)
+	s.console.Bullet("OWASP CRS version: " + plan.OWASPCRSVersion)
+	s.console.Bullet(fmt.Sprintf("VHost reCAPTCHA defaults: type=%d regConnLimit=%d", plan.VHRecaptchaType, plan.VHRecaptchaReqLimit))
 	for _, p := range pkgs {
 		s.console.Bullet("Package: " + p)
 	}
@@ -191,6 +196,10 @@ func (s SiteService) InstallRuntime(ctx context.Context, opts InstallOptions) er
 		} else {
 			s.console.Bullet("skip listener configuration")
 		}
+		s.console.Bullet("install/ensure ModSecurity module package (ols-modsecurity)")
+		s.console.Bullet("prepare OWASP CRS bundle and rules include at " + defaultOWASPModSecRulesFile)
+		s.console.Bullet("configure server-level module mod_security with ls_enabled 0")
+		s.console.Bullet(fmt.Sprintf("configure server-level lsrecaptcha with enabled=1 type=%d", defaultServerRecaptchaType))
 		s.console.Success("Dry-run plan generated")
 		return nil
 	}
@@ -212,6 +221,15 @@ func (s SiteService) InstallRuntime(ctx context.Context, opts InstallOptions) er
 		if err := s.configureRuntimeListeners(plan.HTTPPort, plan.HTTPSPort, plan.SSLCertFile, plan.SSLKeyFile); err != nil {
 			return err
 		}
+	}
+
+	if err := s.ensureOWASPPrerequisites(ctx, info, plan.OWASPCRSVersion); err != nil {
+		return err
+	}
+
+	serverConfigPath := filepath.Join(s.lswsRoot, "conf", "httpd_config.conf")
+	if err := s.ensureServerSecurityDefaults(serverConfigPath); err != nil {
+		return err
 	}
 
 	s.console.Success("OpenLiteSpeed runtime installed")
@@ -281,10 +299,6 @@ func (s SiteService) CreateSite(ctx context.Context, opts CreateSiteOptions) err
 		s.console.Bullet("append virtualhost block into " + serverConfigPath)
 		s.console.Bullet("insert listener map in " + serverConfigPath)
 		s.console.Bullet("align ownership to parent directories for " + siteRoot + " and " + vhostDir)
-		if boolPtrValue(opts.OWASPEnabled) {
-			s.console.Bullet("verify ModSecurity module exists: " + defaultModSecurityModuleFile)
-			s.console.Bullet("verify OWASP rules file exists: " + defaultOWASPModSecRulesFile)
-		}
 		if opts.OWASPEnabled != nil {
 			s.console.Bullet("set virtual-host OWASP mod_security: " + enabledLabel(*opts.OWASPEnabled))
 		}
@@ -338,15 +352,23 @@ func (s SiteService) CreateSite(ctx context.Context, opts CreateSiteOptions) err
 		return apperr.Wrap(apperr.CodeConfig, "failed to write vhost definition", err)
 	}
 
-	if boolPtrValue(opts.OWASPEnabled) {
-		if err := s.ensureOWASPPrerequisites(ctx, info); err != nil {
-			return err
+	recaptchaType := defaultVHRecaptchaType
+	recaptchaReqLimit := defaultVHRecaptchaReqLimit
+	if boolPtrValue(opts.RecaptchaEnabled) {
+		cfgType, cfgReqLimit, err := s.resolveVHostRecaptchaDefaultsFromConfig()
+		if err != nil {
+			s.console.Warn("Could not parse install config for vhost reCAPTCHA defaults; using built-in defaults")
+		} else {
+			recaptchaType = cfgType
+			recaptchaReqLimit = cfgReqLimit
 		}
 	}
 
 	changedSecurity, err := applyVHostSecurityOptions(vhostConfig, vhostSecurityOptions{
 		OWASPEnabled:      opts.OWASPEnabled,
 		RecaptchaEnabled:  opts.RecaptchaEnabled,
+		RecaptchaType:     recaptchaType,
+		RecaptchaReqLimit: recaptchaReqLimit,
 		EnableHSTSHeaders: opts.EnableHSTSHeaders,
 	})
 	if err != nil {
@@ -503,10 +525,6 @@ func (s SiteService) UpdateSitePHP(ctx context.Context, opts UpdateSiteOptions) 
 			s.console.Bullet("ensure WordPress files exist in " + docRoot)
 			s.console.Bullet("install and activate LiteSpeed Cache plugin via wp-cli")
 		}
-		if boolPtrValue(opts.OWASPEnabled) {
-			s.console.Bullet("verify ModSecurity module exists: " + defaultModSecurityModuleFile)
-			s.console.Bullet("verify OWASP rules file exists: " + defaultOWASPModSecRulesFile)
-		}
 		if opts.OWASPEnabled != nil {
 			s.console.Bullet("set virtual-host OWASP mod_security: " + enabledLabel(*opts.OWASPEnabled))
 		}
@@ -522,18 +540,6 @@ func (s SiteService) UpdateSitePHP(ctx context.Context, opts UpdateSiteOptions) 
 
 	if !fileExists(vhostConfig) {
 		return apperr.New(apperr.CodeValidation, fmt.Sprintf("virtual host does not exist for %s; expected %s", opts.Domain, vhostConfig))
-	}
-
-	if boolPtrValue(opts.OWASPEnabled) {
-		if !phpRequested {
-			info, err = s.detector.Detect(ctx)
-			if err != nil {
-				return err
-			}
-		}
-		if err := s.ensureOWASPPrerequisites(ctx, info); err != nil {
-			return err
-		}
 	}
 
 	if phpRequested {
@@ -561,9 +567,23 @@ func (s SiteService) UpdateSitePHP(ctx context.Context, opts UpdateSiteOptions) 
 		s.console.Success("WordPress + LiteSpeed Cache reconciled")
 	}
 
+	recaptchaType := defaultVHRecaptchaType
+	recaptchaReqLimit := defaultVHRecaptchaReqLimit
+	if boolPtrValue(opts.RecaptchaEnabled) {
+		cfgType, cfgReqLimit, err := s.resolveVHostRecaptchaDefaultsFromConfig()
+		if err != nil {
+			s.console.Warn("Could not parse install config for vhost reCAPTCHA defaults; using built-in defaults")
+		} else {
+			recaptchaType = cfgType
+			recaptchaReqLimit = cfgReqLimit
+		}
+	}
+
 	securityChanged, err := applyVHostSecurityOptions(vhostConfig, vhostSecurityOptions{
 		OWASPEnabled:      opts.OWASPEnabled,
 		RecaptchaEnabled:  opts.RecaptchaEnabled,
+		RecaptchaType:     recaptchaType,
+		RecaptchaReqLimit: recaptchaReqLimit,
 		EnableHSTSHeaders: opts.EnableHSTSHeaders,
 	})
 	if err != nil {
@@ -1294,6 +1314,8 @@ func switchVHostPHPHandler(vhostConfigPath, phpVersion string) error {
 type vhostSecurityOptions struct {
 	OWASPEnabled      *bool
 	RecaptchaEnabled  *bool
+	RecaptchaType     int
+	RecaptchaReqLimit int
 	EnableHSTSHeaders bool
 }
 
@@ -1312,13 +1334,11 @@ func owaspCRSArchiveURL(version string) string {
 	return fmt.Sprintf("https://github.com/coreruleset/coreruleset/archive/refs/tags/v%s.zip", strings.TrimSpace(version))
 }
 
-func (s SiteService) ensureOWASPPrerequisites(ctx context.Context, info platform.Info) error {
-	owaspCRSVersion, err := s.resolveOWASPCRSVersionFromConfig()
-	if err != nil {
-		s.console.Warn("Could not parse install config for OWASP CRS version; falling back to default " + defaultOWASPCRSVersion + ": " + err.Error())
+func (s SiteService) ensureOWASPPrerequisites(ctx context.Context, info platform.Info, owaspCRSVersion string) error {
+	owaspCRSVersion = strings.TrimSpace(owaspCRSVersion)
+	if owaspCRSVersion == "" {
 		owaspCRSVersion = defaultOWASPCRSVersion
 	}
-
 	if !fileExists(defaultModSecurityModuleFile) {
 		s.console.Bullet("Installing ModSecurity module package: ols-modsecurity")
 		installer := platform.NewPackageInstaller(s.runner, info)
@@ -1341,28 +1361,44 @@ func (s SiteService) ensureOWASPPrerequisites(ctx context.Context, info platform
 	return nil
 }
 
-func (s SiteService) resolveOWASPCRSVersionFromConfig() (string, error) {
+func (s SiteService) resolveVHostRecaptchaDefaultsFromConfig() (int, int, error) {
 	cfg, _, err := loadRuntimeInstallConfig("", s.lswsRoot)
 	if err != nil {
-		return "", err
+		return 0, 0, err
 	}
-	version := strings.TrimSpace(cfg.OWASPCRSVersion)
-	if version == "" {
-		return defaultOWASPCRSVersion, nil
+	recaptchaType := cfg.VHRecaptchaType
+	if recaptchaType <= 0 {
+		recaptchaType = defaultVHRecaptchaType
 	}
-	return version, nil
+	recaptchaReqLimit := cfg.VHRecaptchaReqLimit
+	if recaptchaReqLimit <= 0 {
+		recaptchaReqLimit = defaultVHRecaptchaReqLimit
+	}
+	return recaptchaType, recaptchaReqLimit, nil
 }
 
 func ensureOWASPRulesBundle(rulesPath, crsVersion string) (bool, error) {
 	owaspDir := filepath.Dir(rulesPath)
 	crsDir := filepath.Join(owaspDir, defaultOWASPCRSDirName)
 	changed := false
+	versionMarker := filepath.Join(owaspDir, ".ols-crs-version")
 
 	if err := os.MkdirAll(owaspDir, 0o755); err != nil {
 		return false, apperr.Wrap(apperr.CodeConfig, "failed to create OWASP directory", err)
 	}
 
-	if !fileExists(filepath.Join(crsDir, "rules")) {
+	needInstall := !fileExists(filepath.Join(crsDir, "rules"))
+	if !needInstall {
+		if markerBytes, err := os.ReadFile(versionMarker); err == nil {
+			if strings.TrimSpace(string(markerBytes)) != strings.TrimSpace(crsVersion) {
+				needInstall = true
+			}
+		} else if !os.IsNotExist(err) {
+			return false, apperr.Wrap(apperr.CodeConfig, "failed to read OWASP CRS version marker", err)
+		}
+	}
+
+	if needInstall {
 		if err := installOWASPCRSBundle(owaspDir, crsDir, crsVersion); err != nil {
 			return false, err
 		}
@@ -1412,6 +1448,12 @@ func ensureOWASPRulesBundle(rulesPath, crsVersion string) (bool, error) {
 		return false, err
 	}
 	changed = changed || includesChanged
+
+	versionChanged, err := writeFileIfChanged(versionMarker, []byte(strings.TrimSpace(crsVersion)+"\n"), 0o644)
+	if err != nil {
+		return false, err
+	}
+	changed = changed || versionChanged
 
 	return changed, nil
 }
@@ -1619,6 +1661,64 @@ func isServerRecaptchaEnabled(serverConfigPath string) (bool, error) {
 	return false, nil
 }
 
+func buildServerModSecurityDefaultBlock() []string {
+	return []string{
+		"module mod_security {",
+		formatDirectiveLine("  ", "modsecurity", "on"),
+		"  modsecurity_rules       `",
+		"  SecRuleEngine On",
+		"  `",
+		formatDirectiveLine("  ", "modsecurity_rules_file", defaultOWASPModSecRulesFile),
+		formatDirectiveLine("  ", "ls_enabled", "0"),
+		"}",
+	}
+}
+
+func buildServerRecaptchaDefaultBlock() []string {
+	return []string{
+		"lsrecaptcha  {",
+		formatDirectiveLine("  ", "enabled", "1"),
+		formatDirectiveLine("  ", "type", fmt.Sprintf("%d", defaultServerRecaptchaType)),
+		"}",
+	}
+}
+
+func upsertServerDefaultBlock(lines []string, key string, block []string) ([]string, bool) {
+	start, end := findBlockByKey(lines, key)
+	if start < 0 || end < 0 {
+		return appendBlock(lines, block), true
+	}
+	current := append([]string{}, lines[start:end+1]...)
+	if sameStringSlice(current, block) {
+		return lines, false
+	}
+	return replaceBlock(lines, start, end, block), true
+}
+
+func (s SiteService) ensureServerSecurityDefaults(serverConfigPath string) error {
+	b, err := os.ReadFile(serverConfigPath)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeConfig, "failed to read OpenLiteSpeed server config", err)
+	}
+
+	lines := strings.Split(string(b), "\n")
+	changed := false
+
+	lines, modsecChanged := upsertServerDefaultBlock(lines, "module mod_security", buildServerModSecurityDefaultBlock())
+	changed = changed || modsecChanged
+	lines, recaptchaChanged := upsertServerDefaultBlock(lines, "lsrecaptcha", buildServerRecaptchaDefaultBlock())
+	changed = changed || recaptchaChanged
+
+	if !changed {
+		return nil
+	}
+	if err := os.WriteFile(serverConfigPath, []byte(strings.Join(lines, "\n")), 0o644); err != nil {
+		return apperr.Wrap(apperr.CodeConfig, "failed to update OpenLiteSpeed server security defaults", err)
+	}
+	s.console.Bullet("Configured server-level ModSecurity (ls_enabled=0) and reCAPTCHA defaults in " + serverConfigPath)
+	return nil
+}
+
 func applyVHostSecurityOptions(vhostConfigPath string, opts vhostSecurityOptions) (bool, error) {
 	if opts.OWASPEnabled == nil && opts.RecaptchaEnabled == nil && !opts.EnableHSTSHeaders {
 		return false, nil
@@ -1642,7 +1742,15 @@ func applyVHostSecurityOptions(vhostConfigPath string, opts vhostSecurityOptions
 	}
 
 	if opts.RecaptchaEnabled != nil {
-		updated, blockChanged, err := upsertVHostRecaptchaBlock(lines, *opts.RecaptchaEnabled)
+		recaptchaType := opts.RecaptchaType
+		if recaptchaType <= 0 {
+			recaptchaType = defaultVHRecaptchaType
+		}
+		recaptchaReqLimit := opts.RecaptchaReqLimit
+		if recaptchaReqLimit <= 0 {
+			recaptchaReqLimit = defaultVHRecaptchaReqLimit
+		}
+		updated, blockChanged, err := upsertVHostRecaptchaBlock(lines, *opts.RecaptchaEnabled, recaptchaType, recaptchaReqLimit)
 		if err != nil {
 			return false, err
 		}
@@ -1685,110 +1793,68 @@ func replaceBlock(lines []string, start, end int, block []string) []string {
 	return updated
 }
 
-func buildVHostOWASPBlock(enabled bool) []string {
-	status := "off"
-	if enabled {
-		status = "on"
-	}
-
-	lines := []string{
-		"module mod_security {",
-		formatDirectiveLine("  ", "modsecurity", status),
-	}
-	if enabled {
-		lines = append(lines,
-			"  modsecurity_rules       `",
-			"  SecRuleEngine On",
-			"  `",
-			formatDirectiveLine("  ", "modsecurity_rules_file", defaultOWASPModSecRulesFile),
-			formatDirectiveLine("  ", "ls_enabled", "1"),
-		)
-	}
-	lines = append(lines, "}")
-	return lines
+func removeBlock(lines []string, start, end int) []string {
+	updated := append([]string{}, lines[:start]...)
+	updated = append(updated, lines[end+1:]...)
+	return updated
 }
 
-func hasModSecurityRulesDirective(lines []string) bool {
-	for _, line := range lines {
-		fields := strings.Fields(strings.TrimSpace(line))
-		if len(fields) > 0 && fields[0] == "modsecurity_rules" {
-			return true
-		}
-	}
-	return false
-}
-
-func upsertVHostOWASPBlock(lines []string, enabled bool) ([]string, bool, error) {
-	start, end := findBlockByKey(lines, "module mod_security")
-	if start < 0 || end < 0 {
-		return appendBlock(lines, buildVHostOWASPBlock(enabled)), true, nil
-	}
-
-	body := append([]string{}, lines[start+1:end]...)
-	originalBody := strings.Join(body, "\n")
-	state := "off"
-	if enabled {
-		state = "on"
-	}
-	updatedBody, _ := upsertDirective(body, "modsecurity", state)
-
-	if enabled {
-		updatedBody, _ = upsertDirective(updatedBody, "modsecurity_rules_file", defaultOWASPModSecRulesFile)
-		updatedBody, _ = upsertDirective(updatedBody, "ls_enabled", "1")
-		if !hasModSecurityRulesDirective(updatedBody) {
-			indent := detectDirectiveIndent(updatedBody)
-			if indent == "" {
-				indent = "  "
-			}
-			updatedBody = append(updatedBody,
-				indent+"modsecurity_rules       `",
-				indent+"SecRuleEngine On",
-				indent+"`",
-			)
-		}
-	}
-
-	if strings.Join(updatedBody, "\n") == originalBody {
-		return lines, false, nil
-	}
-
-	newBlock := []string{lines[start]}
-	newBlock = append(newBlock, updatedBody...)
-	newBlock = append(newBlock, lines[end])
-	return replaceBlock(lines, start, end, newBlock), true, nil
-}
-
-func buildVHostRecaptchaBlock(enabled bool) []string {
-	value := "0"
-	if enabled {
-		value = "1"
-	}
+func buildVHostOWASPBlock() []string {
 	return []string{
-		"lsrecaptcha  {",
-		formatDirectiveLine("  ", "enabled", value),
+		"module mod_security {",
+		formatDirectiveLine("  ", "ls_enabled", "1"),
 		"}",
 	}
 }
 
-func upsertVHostRecaptchaBlock(lines []string, enabled bool) ([]string, bool, error) {
-	start, end := findBlockByKey(lines, "lsrecaptcha")
-	if start < 0 || end < 0 {
-		return appendBlock(lines, buildVHostRecaptchaBlock(enabled)), true, nil
+func upsertVHostOWASPBlock(lines []string, enabled bool) ([]string, bool, error) {
+	start, end := findBlockByKey(lines, "module mod_security")
+	if enabled {
+		block := buildVHostOWASPBlock()
+		if start < 0 || end < 0 {
+			return appendBlock(lines, block), true, nil
+		}
+		current := append([]string{}, lines[start:end+1]...)
+		if sameStringSlice(current, block) {
+			return lines, false, nil
+		}
+		return replaceBlock(lines, start, end, block), true, nil
 	}
 
-	body := append([]string{}, lines[start+1:end]...)
-	value := "0"
-	if enabled {
-		value = "1"
-	}
-	updatedBody, changed := upsertDirective(body, "enabled", value)
-	if !changed {
+	if start < 0 || end < 0 {
 		return lines, false, nil
 	}
-	newBlock := []string{lines[start]}
-	newBlock = append(newBlock, updatedBody...)
-	newBlock = append(newBlock, lines[end])
-	return replaceBlock(lines, start, end, newBlock), true, nil
+	return removeBlock(lines, start, end), true, nil
+}
+
+func buildVHostRecaptchaBlock(recaptchaType, reqLimit int) []string {
+	return []string{
+		"lsrecaptcha  {",
+		formatDirectiveLine("  ", "enabled", "1"),
+		formatDirectiveLine("  ", "type", fmt.Sprintf("%d", recaptchaType)),
+		formatDirectiveLine("  ", "regConnLimit", fmt.Sprintf("%d", reqLimit)),
+		"}",
+	}
+}
+
+func upsertVHostRecaptchaBlock(lines []string, enabled bool, recaptchaType, reqLimit int) ([]string, bool, error) {
+	start, end := findBlockByKey(lines, "lsrecaptcha")
+	if enabled {
+		block := buildVHostRecaptchaBlock(recaptchaType, reqLimit)
+		if start < 0 || end < 0 {
+			return appendBlock(lines, block), true, nil
+		}
+		current := append([]string{}, lines[start:end+1]...)
+		if sameStringSlice(current, block) {
+			return lines, false, nil
+		}
+		return replaceBlock(lines, start, end, block), true, nil
+	}
+
+	if start < 0 || end < 0 {
+		return lines, false, nil
+	}
+	return removeBlock(lines, start, end), true, nil
 }
 
 func findExtraHeadersBlock(lines []string) (int, int, string) {

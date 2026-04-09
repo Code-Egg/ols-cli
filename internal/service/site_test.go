@@ -349,6 +349,12 @@ func TestUpdateSiteSecurityOnlyWithoutPHP(t *testing.T) {
 	if !strings.Contains(content, "lsrecaptcha") || !strings.Contains(content, "enabled") || !strings.Contains(content, "1") {
 		t.Fatalf("expected recaptcha block enabled in vhconf, got: %s", content)
 	}
+	if !strings.Contains(content, "type                     1") {
+		t.Fatalf("expected recaptcha type 1 in vhconf, got: %s", content)
+	}
+	if !strings.Contains(content, "regConnLimit             500") {
+		t.Fatalf("expected recaptcha regConnLimit 500 in vhconf, got: %s", content)
+	}
 }
 
 func TestApplyVHostSecurityOptionsEnableAndDisable(t *testing.T) {
@@ -374,14 +380,14 @@ func TestApplyVHostSecurityOptionsEnableAndDisable(t *testing.T) {
 		t.Fatalf("read vhconf: %v", err)
 	}
 	content := string(b)
-	if !strings.Contains(content, "module mod_security") || !strings.Contains(content, "modsecurity") || !strings.Contains(content, "on") {
+	if !strings.Contains(content, "module mod_security") || !strings.Contains(content, "ls_enabled               1") {
 		t.Fatalf("expected mod_security enabled block, got: %s", content)
-	}
-	if !strings.Contains(content, defaultOWASPModSecRulesFile) {
-		t.Fatalf("expected OWASP rules path, got: %s", content)
 	}
 	if !strings.Contains(content, "lsrecaptcha") || !strings.Contains(content, "enabled") {
 		t.Fatalf("expected recaptcha block, got: %s", content)
+	}
+	if !strings.Contains(content, "type                     1") || !strings.Contains(content, "regConnLimit             500") {
+		t.Fatalf("expected recaptcha type/limit in block, got: %s", content)
 	}
 	if !strings.Contains(content, "extraHeaders") || !strings.Contains(content, "Strict-Transport-Security") {
 		t.Fatalf("expected security headers block, got: %s", content)
@@ -403,11 +409,53 @@ func TestApplyVHostSecurityOptionsEnableAndDisable(t *testing.T) {
 		t.Fatalf("read vhconf: %v", err)
 	}
 	content = string(b)
-	if !strings.Contains(content, "module mod_security") || !strings.Contains(content, "modsecurity") || !strings.Contains(content, "off") {
-		t.Fatalf("expected mod_security disabled state, got: %s", content)
+	if strings.Contains(content, "module mod_security") {
+		t.Fatalf("expected mod_security block removed when disabled, got: %s", content)
 	}
-	if !strings.Contains(content, "lsrecaptcha") || !strings.Contains(content, "enabled                  0") {
-		t.Fatalf("expected recaptcha disabled state, got: %s", content)
+	if strings.Contains(content, "lsrecaptcha") {
+		t.Fatalf("expected recaptcha block removed when disabled, got: %s", content)
+	}
+}
+
+func TestEnsureServerSecurityDefaults(t *testing.T) {
+	var out bytes.Buffer
+	console := ui.NewStyledConsole(&out)
+	r := &fakeRunner{}
+
+	base := t.TempDir()
+	lswsRoot := filepath.Join(base, "lsws")
+	webRoot := filepath.Join(base, "www")
+	serverConfigPath := filepath.Join(lswsRoot, "conf", "httpd_config.conf")
+
+	if err := os.MkdirAll(filepath.Dir(serverConfigPath), 0o755); err != nil {
+		t.Fatalf("mkdir conf dir: %v", err)
+	}
+	if err := os.WriteFile(serverConfigPath, []byte("listener Default {\n}\n"), 0o644); err != nil {
+		t.Fatalf("write server config: %v", err)
+	}
+
+	svc := NewSiteServiceWithPaths(
+		fakeDetector{info: platform.Info{ID: "ubuntu", Family: platform.FamilyDebian, PackageManager: platform.PackageManagerAPT, VersionID: "24.04"}},
+		r,
+		console,
+		lswsRoot,
+		webRoot,
+	)
+
+	if err := svc.ensureServerSecurityDefaults(serverConfigPath); err != nil {
+		t.Fatalf("unexpected server defaults error: %v", err)
+	}
+
+	updated, err := os.ReadFile(serverConfigPath)
+	if err != nil {
+		t.Fatalf("read server config: %v", err)
+	}
+	content := string(updated)
+	if !strings.Contains(content, "module mod_security") || !strings.Contains(content, "ls_enabled               0") {
+		t.Fatalf("expected server mod_security defaults, got: %s", content)
+	}
+	if !strings.Contains(content, "lsrecaptcha") || !strings.Contains(content, "enabled                  1") || !strings.Contains(content, "type                     0") {
+		t.Fatalf("expected server recaptcha defaults, got: %s", content)
 	}
 }
 

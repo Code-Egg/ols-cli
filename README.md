@@ -141,7 +141,13 @@ sudo cp docs/install.example.json /etc/ols-cli/install.json
 sudo ols install
 ```
 
-`install.json` also supports `owasp_crs_version` (for example, `"owasp_crs_version": "4.21.0"`), which is used when enabling OWASP via `site create/update --enable-owasp`.
+`install.json` also supports:
+- `owasp_crs_version` (for example, `"4.21.0"`) for OWASP CRS setup during `ols install`
+- `vh_recaptcha_type` and `vh_recaptcha_reg_conn_limit` (defaults: `1` and `500`) used when enabling vhost reCAPTCHA via `site create/update --enable-recaptcha`
+
+By default, `ols install` prepares server-level security blocks as:
+- `module mod_security` with `ls_enabled 0`
+- `lsrecaptcha` with `enabled 1` and `type 0`
 
 Override config values with flags when needed:
 
