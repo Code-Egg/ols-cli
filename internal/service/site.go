@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -50,6 +51,10 @@ const (
 	defaultModSecurityModuleFile = "/usr/local/lsws/modules/mod_security.so"
 	defaultLiteSpeedRepoScript   = "https://repo.litespeed.sh"
 	defaultRepoScriptTempPath    = "/tmp/ols-cli-litespeed-repo.sh"
+	defaultHTTPUserAgent         = "ols-cli/0.1 (+https://github.com/ols/ols-cli)"
+	defaultHTTPRetryAttempts     = 5
+	defaultHTTPRetryMinDelay     = 2 * time.Second
+	defaultHTTPRetryMaxDelay     = 30 * time.Second
 	wpArchiveURL                 = "https://wordpress.org/latest.tar.gz"
 	wpArchiveSHA1URL             = "https://wordpress.org/latest.tar.gz.sha1"
 	wpCLIPharURL                 = "https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar"
@@ -2854,23 +2859,113 @@ func packagesForPHPUpdate(phpVersion string) []string {
 	return []string{"lsphp" + phpVersion, "lsphp" + phpVersion + "-mysql"}
 }
 
+func newHTTPGetRequest(url string) (*http.Request, error) {
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.CodeValidation, "invalid download URL", err)
+	}
+	req.Header.Set("User-Agent", defaultHTTPUserAgent)
+	req.Header.Set("Accept", "*/*")
+	return req, nil
+}
+
+func isRetryableHTTPStatus(status int) bool {
+	return status == http.StatusTooManyRequests ||
+		status == http.StatusRequestTimeout ||
+		status == http.StatusBadGateway ||
+		status == http.StatusServiceUnavailable ||
+		status == http.StatusGatewayTimeout ||
+		status >= 500
+}
+
+func parseRetryAfterDelay(header string) time.Duration {
+	raw := strings.TrimSpace(header)
+	if raw == "" {
+		return 0
+	}
+	if seconds, err := strconv.Atoi(raw); err == nil {
+		if seconds <= 0 {
+			return 0
+		}
+		return time.Duration(seconds) * time.Second
+	}
+	if t, err := http.ParseTime(raw); err == nil {
+		d := time.Until(t)
+		if d > 0 {
+			return d
+		}
+	}
+	return 0
+}
+
+func retryDelayForAttempt(attempt int, retryAfterHeader string) time.Duration {
+	if d := parseRetryAfterDelay(retryAfterHeader); d > 0 {
+		if d > defaultHTTPRetryMaxDelay {
+			return defaultHTTPRetryMaxDelay
+		}
+		return d
+	}
+	delay := defaultHTTPRetryMinDelay
+	for i := 1; i < attempt; i++ {
+		delay *= 2
+		if delay >= defaultHTTPRetryMaxDelay {
+			return defaultHTTPRetryMaxDelay
+		}
+	}
+	if delay > defaultHTTPRetryMaxDelay {
+		return defaultHTTPRetryMaxDelay
+	}
+	return delay
+}
+
 func downloadText(url string) (string, error) {
 	client := &http.Client{Timeout: 2 * time.Minute}
-	resp, err := client.Get(url)
-	if err != nil {
-		return "", apperr.Wrap(apperr.CodeCommand, "failed to download remote text", err)
-	}
-	defer resp.Body.Close()
+	var lastErr error
+	for attempt := 1; attempt <= defaultHTTPRetryAttempts; attempt++ {
+		req, err := newHTTPGetRequest(url)
+		if err != nil {
+			return "", err
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			lastErr = apperr.Wrap(apperr.CodeCommand, "failed to download remote text", err)
+			if attempt < defaultHTTPRetryAttempts {
+				time.Sleep(retryDelayForAttempt(attempt, ""))
+				continue
+			}
+			return "", lastErr
+		}
 
-	if resp.StatusCode != http.StatusOK {
-		return "", apperr.New(apperr.CodeCommand, fmt.Sprintf("failed to download remote text: http %d", resp.StatusCode))
-	}
+		if resp.StatusCode != http.StatusOK {
+			statusCode := resp.StatusCode
+			retryAfter := resp.Header.Get("Retry-After")
+			retryable := isRetryableHTTPStatus(statusCode)
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+			resp.Body.Close()
+			lastErr = apperr.New(apperr.CodeCommand, fmt.Sprintf("failed to download remote text: http %d", statusCode))
+			if retryable && attempt < defaultHTTPRetryAttempts {
+				time.Sleep(retryDelayForAttempt(attempt, retryAfter))
+				continue
+			}
+			return "", lastErr
+		}
 
-	b, err := io.ReadAll(io.LimitReader(resp.Body, 32*1024))
-	if err != nil {
-		return "", apperr.Wrap(apperr.CodeCommand, "failed to read remote text", err)
+		b, err := io.ReadAll(io.LimitReader(resp.Body, 32*1024))
+		resp.Body.Close()
+		if err != nil {
+			lastErr = apperr.Wrap(apperr.CodeCommand, "failed to read remote text", err)
+			if attempt < defaultHTTPRetryAttempts {
+				time.Sleep(retryDelayForAttempt(attempt, ""))
+				continue
+			}
+			return "", lastErr
+		}
+		return strings.TrimSpace(string(b)), nil
 	}
-	return strings.TrimSpace(string(b)), nil
+	if lastErr != nil {
+		return "", lastErr
+	}
+	return "", apperr.New(apperr.CodeCommand, "failed to download remote text")
 }
 
 func parseExpectedHexDigest(raw string, minLen, maxLen int) (string, error) {
@@ -2915,43 +3010,84 @@ func computeFileSHA512(path string) (string, error) {
 
 func downloadToFile(url, destPath string, mode os.FileMode) error {
 	client := &http.Client{Timeout: 2 * time.Minute}
-	resp, err := client.Get(url)
-	if err != nil {
-		return apperr.Wrap(apperr.CodeCommand, "failed to download file", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return apperr.New(apperr.CodeCommand, fmt.Sprintf("failed to download file: http %d", resp.StatusCode))
-	}
 
 	if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
 		return apperr.Wrap(apperr.CodeConfig, "failed to create destination directory", err)
 	}
 
-	tmp, err := os.CreateTemp(filepath.Dir(destPath), "ols-download-*")
-	if err != nil {
-		return apperr.Wrap(apperr.CodeConfig, "failed to create temporary download file", err)
-	}
-	tmpPath := tmp.Name()
-	defer func() {
-		_ = tmp.Close()
-		_ = os.Remove(tmpPath)
-	}()
+	var lastErr error
+	for attempt := 1; attempt <= defaultHTTPRetryAttempts; attempt++ {
+		req, err := newHTTPGetRequest(url)
+		if err != nil {
+			return err
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			lastErr = apperr.Wrap(apperr.CodeCommand, "failed to download file", err)
+			if attempt < defaultHTTPRetryAttempts {
+				time.Sleep(retryDelayForAttempt(attempt, ""))
+				continue
+			}
+			return lastErr
+		}
 
-	if _, err := io.Copy(tmp, io.LimitReader(resp.Body, 256*1024*1024)); err != nil {
-		return apperr.Wrap(apperr.CodeConfig, "failed to write downloaded file", err)
+		if resp.StatusCode != http.StatusOK {
+			statusCode := resp.StatusCode
+			retryAfter := resp.Header.Get("Retry-After")
+			retryable := isRetryableHTTPStatus(statusCode)
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+			resp.Body.Close()
+			lastErr = apperr.New(apperr.CodeCommand, fmt.Sprintf("failed to download file: http %d", statusCode))
+			if retryable && attempt < defaultHTTPRetryAttempts {
+				time.Sleep(retryDelayForAttempt(attempt, retryAfter))
+				continue
+			}
+			return lastErr
+		}
+
+		tmp, err := os.CreateTemp(filepath.Dir(destPath), "ols-download-*")
+		if err != nil {
+			resp.Body.Close()
+			return apperr.Wrap(apperr.CodeConfig, "failed to create temporary download file", err)
+		}
+		tmpPath := tmp.Name()
+
+		_, copyErr := io.Copy(tmp, io.LimitReader(resp.Body, 256*1024*1024))
+		resp.Body.Close()
+		closeErr := tmp.Close()
+
+		if copyErr != nil {
+			_ = os.Remove(tmpPath)
+			lastErr = apperr.Wrap(apperr.CodeConfig, "failed to write downloaded file", copyErr)
+			if attempt < defaultHTTPRetryAttempts {
+				time.Sleep(retryDelayForAttempt(attempt, ""))
+				continue
+			}
+			return lastErr
+		}
+		if closeErr != nil {
+			_ = os.Remove(tmpPath)
+			lastErr = apperr.Wrap(apperr.CodeConfig, "failed to finalize downloaded file", closeErr)
+			if attempt < defaultHTTPRetryAttempts {
+				time.Sleep(retryDelayForAttempt(attempt, ""))
+				continue
+			}
+			return lastErr
+		}
+		if err := os.Chmod(tmpPath, mode); err != nil {
+			_ = os.Remove(tmpPath)
+			return apperr.Wrap(apperr.CodeConfig, "failed to set downloaded file permissions", err)
+		}
+		if err := os.Rename(tmpPath, destPath); err != nil {
+			_ = os.Remove(tmpPath)
+			return apperr.Wrap(apperr.CodeConfig, "failed to move downloaded file into place", err)
+		}
+		return nil
 	}
-	if err := tmp.Close(); err != nil {
-		return apperr.Wrap(apperr.CodeConfig, "failed to finalize downloaded file", err)
+	if lastErr != nil {
+		return lastErr
 	}
-	if err := os.Chmod(tmpPath, mode); err != nil {
-		return apperr.Wrap(apperr.CodeConfig, "failed to set downloaded file permissions", err)
-	}
-	if err := os.Rename(tmpPath, destPath); err != nil {
-		return apperr.Wrap(apperr.CodeConfig, "failed to move downloaded file into place", err)
-	}
-	return nil
+	return apperr.New(apperr.CodeCommand, "failed to download file")
 }
 
 func downloadFileWithSHA1Verification(url, checksumURL, destPath string) error {
