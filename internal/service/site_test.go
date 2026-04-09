@@ -37,6 +37,10 @@ func (f *fakeRunner) Run(_ context.Context, name string, args ...string) (runner
 	return runner.Result{}, nil
 }
 
+func boolPtr(v bool) *bool {
+	return &v
+}
+
 func TestNormalizePHPVersion(t *testing.T) {
 	v, err := NormalizePHPVersion("8.2")
 	if err != nil {
@@ -292,6 +296,118 @@ func TestUpdateSitePHPSwitchesHandler(t *testing.T) {
 	}
 	if !strings.Contains(string(updated), "lsphp83") {
 		t.Fatalf("expected new handler present, got: %s", string(updated))
+	}
+}
+
+func TestUpdateSiteSecurityOnlyWithoutPHP(t *testing.T) {
+	var out bytes.Buffer
+	console := ui.NewStyledConsole(&out)
+	r := &fakeRunner{}
+
+	base := t.TempDir()
+	lswsRoot := filepath.Join(base, "lsws")
+	webRoot := filepath.Join(base, "www")
+	vhostDir := filepath.Join(lswsRoot, "conf", "vhosts", "example.com")
+
+	if err := os.MkdirAll(vhostDir, 0o755); err != nil {
+		t.Fatalf("mkdir vhost: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(lswsRoot, "conf"), 0o755); err != nil {
+		t.Fatalf("mkdir conf: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(lswsRoot, "conf", "httpd_config.conf"), []byte("listener Default {\n}\n"), 0o644); err != nil {
+		t.Fatalf("write server config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(vhostDir, "vhconf.conf"), []byte(buildVHConfig("85")), 0o644); err != nil {
+		t.Fatalf("write vhconf: %v", err)
+	}
+
+	svc := NewSiteServiceWithPaths(
+		fakeDetector{info: platform.Info{ID: "ubuntu", Family: platform.FamilyDebian, PackageManager: platform.PackageManagerAPT, VersionID: "24.04"}},
+		r,
+		console,
+		lswsRoot,
+		webRoot,
+	)
+
+	err := svc.UpdateSitePHP(context.Background(), UpdateSiteOptions{
+		Domain:           "example.com",
+		RecaptchaEnabled: boolPtr(true),
+	})
+	if err != nil {
+		t.Fatalf("unexpected update error: %v", err)
+	}
+	if len(r.calls) != 0 {
+		t.Fatalf("expected no command runner calls for security-only update, got: %#v", r.calls)
+	}
+
+	updated, err := os.ReadFile(filepath.Join(vhostDir, "vhconf.conf"))
+	if err != nil {
+		t.Fatalf("read vhconf: %v", err)
+	}
+	content := string(updated)
+	if !strings.Contains(content, "lsrecaptcha") || !strings.Contains(content, "enabled") || !strings.Contains(content, "1") {
+		t.Fatalf("expected recaptcha block enabled in vhconf, got: %s", content)
+	}
+}
+
+func TestApplyVHostSecurityOptionsEnableAndDisable(t *testing.T) {
+	vhostPath := filepath.Join(t.TempDir(), "vhconf.conf")
+	if err := os.WriteFile(vhostPath, []byte(buildVHConfig("85")), 0o644); err != nil {
+		t.Fatalf("write vhconf: %v", err)
+	}
+
+	changed, err := applyVHostSecurityOptions(vhostPath, vhostSecurityOptions{
+		OWASPEnabled:      boolPtr(true),
+		RecaptchaEnabled:  boolPtr(true),
+		EnableHSTSHeaders: true,
+	})
+	if err != nil {
+		t.Fatalf("unexpected apply error: %v", err)
+	}
+	if !changed {
+		t.Fatal("expected security config to change")
+	}
+
+	b, err := os.ReadFile(vhostPath)
+	if err != nil {
+		t.Fatalf("read vhconf: %v", err)
+	}
+	content := string(b)
+	if !strings.Contains(content, "module mod_security") || !strings.Contains(content, "modsecurity") || !strings.Contains(content, "on") {
+		t.Fatalf("expected mod_security enabled block, got: %s", content)
+	}
+	if !strings.Contains(content, defaultOWASPModSecRulesFile) {
+		t.Fatalf("expected OWASP rules path, got: %s", content)
+	}
+	if !strings.Contains(content, "lsrecaptcha") || !strings.Contains(content, "enabled") {
+		t.Fatalf("expected recaptcha block, got: %s", content)
+	}
+	if !strings.Contains(content, "extraHeaders") || !strings.Contains(content, "Strict-Transport-Security") {
+		t.Fatalf("expected security headers block, got: %s", content)
+	}
+
+	changed, err = applyVHostSecurityOptions(vhostPath, vhostSecurityOptions{
+		OWASPEnabled:     boolPtr(false),
+		RecaptchaEnabled: boolPtr(false),
+	})
+	if err != nil {
+		t.Fatalf("unexpected disable apply error: %v", err)
+	}
+	if !changed {
+		t.Fatal("expected disable operation to change config")
+	}
+
+	b, err = os.ReadFile(vhostPath)
+	if err != nil {
+		t.Fatalf("read vhconf: %v", err)
+	}
+	content = string(b)
+	if !strings.Contains(content, "module mod_security") || !strings.Contains(content, "modsecurity") || !strings.Contains(content, "off") {
+		t.Fatalf("expected mod_security disabled state, got: %s", content)
+	}
+	if !strings.Contains(content, "lsrecaptcha") || !strings.Contains(content, "enabled                  0") {
+		t.Fatalf("expected recaptcha disabled state, got: %s", content)
 	}
 }
 

@@ -30,3 +30,32 @@ func TestPHPFlagsSelectedDefault(t *testing.T) {
 		t.Fatalf("expected default 85, got %s", got)
 	}
 }
+
+func TestToggleFlagsSelectedEnable(t *testing.T) {
+	flags := toggleFlags{enable: true}
+	got, err := flags.selected("owasp")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got == nil || !*got {
+		t.Fatal("expected enabled toggle")
+	}
+}
+
+func TestToggleFlagsSelectedDisable(t *testing.T) {
+	flags := toggleFlags{disable: true}
+	got, err := flags.selected("recaptcha")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got == nil || *got {
+		t.Fatal("expected disabled toggle")
+	}
+}
+
+func TestToggleFlagsSelectedConflict(t *testing.T) {
+	flags := toggleFlags{enable: true, disable: true}
+	if _, err := flags.selected("owasp"); err == nil {
+		t.Fatal("expected validation error for conflicting toggle flags")
+	}
+}

@@ -48,6 +48,12 @@ sudo ols site create example.com --wp
 sudo ols site update example.com --php85
 ```
 
+### Enable OWASP + reCAPTCHA and add security headers on a site
+
+```bash
+sudo ols site update example.com --enable-owasp --enable-recaptcha --hsts
+```
+
 ### Show site information
 
 ```bash
@@ -69,8 +75,8 @@ ols site list
 ### Preview operations without making changes
 
 ```bash
-ols --dry-run site create example.com --wp --le --php85
-ols --dry-run site update example.com --wp --php83
+ols --dry-run site create example.com --wp --le --php85 --enable-owasp --hsts
+ols --dry-run site update example.com --enable-recaptcha --disable-owasp
 ols --dry-run site info example.com
 ols --dry-run site show example.com
 ols --dry-run site list
@@ -81,8 +87,8 @@ ols --dry-run site list
 | Command | Purpose | Common options |
 | --- | --- | --- |
 | `ols install` | Install/align OpenLiteSpeed runtime and related packages | `--php81` `--php82` `--php83` `--php84` `--php85` `--database` `--config` `--http-port` `--https-port` `--ssl-cert` `--ssl-key` `--no-listeners` |
-| `ols site create <domain>` | Create a new site/vhost | `--wp` `--le` `--php81` `--php82` `--php83` `--php84` `--php85` |
-| `ols site update <domain>` | Update an existing site (PHP target is required) | `--wp` `--php81` `--php82` `--php83` `--php84` `--php85` |
+| `ols site create <domain>` | Create a new site/vhost | `--wp` `--le` `--php81` `--php82` `--php83` `--php84` `--php85` `--enable-owasp` `--disable-owasp` `--enable-recaptcha` `--disable-recaptcha` `--hsts` |
+| `ols site update <domain>` | Update an existing site (PHP target optional when only security flags are used) | `--wp` `--php81` `--php82` `--php83` `--php84` `--php85` `--enable-owasp` `--disable-owasp` `--enable-recaptcha` `--disable-recaptcha` `--hsts` |
 | `ols site info <domain>` | Show site metadata and detected status | *(none)* |
 | `ols site show <domain>` | Print OLS virtual host config (`vhconf.conf`) | *(none)* |
 | `ols site list` | List managed sites discovered from OLS vhost directory | *(none)* |
@@ -95,8 +101,8 @@ Global options (apply to all commands): `--dry-run`, `--color`
 
 | Subcommand | Syntax | Options |
 | --- | --- | --- |
-| `create` | `ols site create <domain>` | `--wp` `--le` `--php81` `--php82` `--php83` `--php84` `--php85` |
-| `update` | `ols site update <domain>` | `--wp` and exactly one of `--php81` `--php82` `--php83` `--php84` `--php85` |
+| `create` | `ols site create <domain>` | `--wp` `--le` `--php81` `--php82` `--php83` `--php84` `--php85` `--enable-owasp` `--disable-owasp` `--enable-recaptcha` `--disable-recaptcha` `--hsts` |
+| `update` | `ols site update <domain>` | `--wp` (requires one of `--php81` `--php82` `--php83` `--php84` `--php85`), or security flags only: `--enable-owasp` `--disable-owasp` `--enable-recaptcha` `--disable-recaptcha` `--hsts` |
 | `info` | `ols site info <domain>` | *(none)* |
 | `show` | `ols site show <domain>` | *(none)* |
 | `list` | `ols site list` | *(none)* |

@@ -26,6 +26,26 @@ type phpFlags struct {
 	v85 bool
 }
 
+type toggleFlags struct {
+	enable  bool
+	disable bool
+}
+
+func (f toggleFlags) selected(feature string) (*bool, error) {
+	if f.enable && f.disable {
+		return nil, apperr.New(apperr.CodeValidation, fmt.Sprintf("conflicting flags for %s; choose only one of --enable-%s/--disable-%s", feature, feature, feature))
+	}
+	if f.enable {
+		enabled := true
+		return &enabled, nil
+	}
+	if f.disable {
+		disabled := false
+		return &disabled, nil
+	}
+	return nil, nil
+}
+
 func (f phpFlags) selected(defaultVersion string) (string, error) {
 	selected := ""
 	count := 0
@@ -85,27 +105,41 @@ func newSiteCmd(svc siteManager, rootOpts *rootOptions) *cobra.Command {
 
 func newSiteCreateCmd(svc siteManager, rootOpts *rootOptions) *cobra.Command {
 	php := &phpFlags{}
+	owasp := &toggleFlags{}
+	recaptcha := &toggleFlags{}
 	var withWordPress bool
 	var withLE bool
+	var withHSTS bool
 
 	cmd := &cobra.Command{
 		Use:   "create <domain>",
 		Short: "Create a new OpenLiteSpeed virtual host",
 		Example: "ols site create example.com --wp\n" +
-			"ols site create example.com --wp --php84\n" +
-			"ols --dry-run site create example.com --wp --le --php85",
+			"ols site create example.com --wp --php84 --enable-owasp --enable-recaptcha\n" +
+			"ols --dry-run site create example.com --wp --le --php85 --hsts",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			phpVersion, err := php.selected("85")
 			if err != nil {
 				return err
 			}
+			owaspEnabled, err := owasp.selected("owasp")
+			if err != nil {
+				return err
+			}
+			recaptchaEnabled, err := recaptcha.selected("recaptcha")
+			if err != nil {
+				return err
+			}
 			err = svc.CreateSite(cmd.Context(), service.CreateSiteOptions{
-				Domain:        args[0],
-				WithWordPress: withWordPress,
-				WithLE:        withLE,
-				PHPVersion:    phpVersion,
-				DryRun:        rootOpts.DryRun,
+				Domain:            args[0],
+				WithWordPress:     withWordPress,
+				WithLE:            withLE,
+				PHPVersion:        phpVersion,
+				OWASPEnabled:      owaspEnabled,
+				RecaptchaEnabled:  recaptchaEnabled,
+				EnableHSTSHeaders: withHSTS,
+				DryRun:            rootOpts.DryRun,
 			})
 			if err != nil {
 				return fmt.Errorf("site create failed: %w", err)
@@ -116,34 +150,57 @@ func newSiteCreateCmd(svc siteManager, rootOpts *rootOptions) *cobra.Command {
 
 	cmd.Flags().BoolVar(&withWordPress, "wp", false, "install WordPress with required dependencies")
 	cmd.Flags().BoolVar(&withLE, "le", false, "configure Let's Encrypt certificate")
+	cmd.Flags().BoolVar(&owasp.enable, "enable-owasp", false, "enable OWASP ModSecurity at virtual host level")
+	cmd.Flags().BoolVar(&owasp.disable, "disable-owasp", false, "disable OWASP ModSecurity at virtual host level")
+	cmd.Flags().BoolVar(&recaptcha.enable, "enable-recaptcha", false, "enable reCAPTCHA at virtual host level")
+	cmd.Flags().BoolVar(&recaptcha.disable, "disable-recaptcha", false, "disable reCAPTCHA at virtual host level")
+	cmd.Flags().BoolVar(&withHSTS, "hsts", false, "add recommended security extra headers to static context /")
 	addPHPVersionFlags(cmd, php)
 	return cmd
 }
 
 func newSiteUpdateCmd(svc siteManager, rootOpts *rootOptions) *cobra.Command {
 	php := &phpFlags{}
+	owasp := &toggleFlags{}
+	recaptcha := &toggleFlags{}
 	var withWordPress bool
+	var withHSTS bool
 
 	cmd := &cobra.Command{
 		Use:   "update <domain>",
 		Short: "Update existing site configuration",
 		Example: "ols site update example.com --php83\n" +
-			"ols site update example.com --wp --php84\n" +
-			"ols --dry-run site update example.com --wp --php85",
+			"ols site update example.com --enable-owasp --enable-recaptcha\n" +
+			"ols --dry-run site update example.com --wp --php85 --hsts",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			phpVersion, err := php.selected("")
 			if err != nil {
 				return err
 			}
-			if phpVersion == "" {
-				return apperr.New(apperr.CodeValidation, "missing PHP version flag; provide one of --php81/--php82/--php83/--php84/--php85")
+			owaspEnabled, err := owasp.selected("owasp")
+			if err != nil {
+				return err
+			}
+			recaptchaEnabled, err := recaptcha.selected("recaptcha")
+			if err != nil {
+				return err
+			}
+
+			if withWordPress && phpVersion == "" {
+				return apperr.New(apperr.CodeValidation, "missing PHP version flag for --wp; provide one of --php81/--php82/--php83/--php84/--php85")
+			}
+			if phpVersion == "" && !withWordPress && owaspEnabled == nil && recaptchaEnabled == nil && !withHSTS {
+				return apperr.New(apperr.CodeValidation, "no update action provided; pass PHP version and/or security flags such as --enable-owasp, --enable-recaptcha, --disable-owasp, --disable-recaptcha, --hsts")
 			}
 			err = svc.UpdateSitePHP(cmd.Context(), service.UpdateSiteOptions{
-				Domain:        args[0],
-				WithWordPress: withWordPress,
-				PHPVersion:    phpVersion,
-				DryRun:        rootOpts.DryRun,
+				Domain:            args[0],
+				WithWordPress:     withWordPress,
+				PHPVersion:        phpVersion,
+				OWASPEnabled:      owaspEnabled,
+				RecaptchaEnabled:  recaptchaEnabled,
+				EnableHSTSHeaders: withHSTS,
+				DryRun:            rootOpts.DryRun,
 			})
 			if err != nil {
 				return fmt.Errorf("site update failed: %w", err)
@@ -153,6 +210,11 @@ func newSiteUpdateCmd(svc siteManager, rootOpts *rootOptions) *cobra.Command {
 	}
 
 	cmd.Flags().BoolVar(&withWordPress, "wp", false, "ensure WordPress and LiteSpeed Cache plugin are present")
+	cmd.Flags().BoolVar(&owasp.enable, "enable-owasp", false, "enable OWASP ModSecurity at virtual host level")
+	cmd.Flags().BoolVar(&owasp.disable, "disable-owasp", false, "disable OWASP ModSecurity at virtual host level")
+	cmd.Flags().BoolVar(&recaptcha.enable, "enable-recaptcha", false, "enable reCAPTCHA at virtual host level")
+	cmd.Flags().BoolVar(&recaptcha.disable, "disable-recaptcha", false, "disable reCAPTCHA at virtual host level")
+	cmd.Flags().BoolVar(&withHSTS, "hsts", false, "add recommended security extra headers to static context /")
 	addPHPVersionFlags(cmd, php)
 	return cmd
 }

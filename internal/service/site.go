@@ -37,13 +37,15 @@ var (
 )
 
 const (
-	defaultLSWSRoot    = "/usr/local/lsws"
-	defaultWebRoot     = "/var/www"
-	defaultSecretsRoot = "/etc/ols-cli/sites"
-	wpArchiveURL       = "https://wordpress.org/latest.tar.gz"
-	wpArchiveSHA1URL   = "https://wordpress.org/latest.tar.gz.sha1"
-	wpCLIPharURL       = "https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar"
-	wpCLIPharSHA512URL = "https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar.sha512"
+	defaultLSWSRoot              = "/usr/local/lsws"
+	defaultWebRoot               = "/var/www"
+	defaultSecretsRoot           = "/etc/ols-cli/sites"
+	defaultOWASPModSecRulesFile  = "/usr/local/lsws/conf/owasp/modsec_includes.conf"
+	defaultModSecurityModuleFile = "/usr/local/lsws/modules/mod_security.so"
+	wpArchiveURL                 = "https://wordpress.org/latest.tar.gz"
+	wpArchiveSHA1URL             = "https://wordpress.org/latest.tar.gz.sha1"
+	wpCLIPharURL                 = "https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar"
+	wpCLIPharSHA512URL           = "https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar.sha512"
 )
 
 type phpINISetting struct {
@@ -56,6 +58,16 @@ var defaultPHPINISettings = []phpINISetting{
 	{key: "upload_max_filesize", value: "1000M"},
 	{key: "memory_limit", value: "1024M"},
 	{key: "max_execution_time", value: "600"},
+}
+
+var defaultHSTSSecurityHeaders = []string{
+	"Strict-Transport-Security: max-age=31536000; includeSubDomains",
+	`Content-Security-Policy "upgrade-insecure-requests;connect-src *"`,
+	"Referrer-Policy strict-origin-when-cross-origin",
+	"X-Frame-Options: SAMEORIGIN",
+	"X-Content-Type-Options: nosniff",
+	"X-XSS-Protection 1;mode=block",
+	`Permissions-Policy: geolocation=(self "")`,
 }
 
 // SiteService contains site lifecycle workflows.
@@ -96,18 +108,24 @@ type InstallOptions struct {
 }
 
 type CreateSiteOptions struct {
-	Domain        string
-	WithWordPress bool
-	WithLE        bool
-	PHPVersion    string
-	DryRun        bool
+	Domain            string
+	WithWordPress     bool
+	WithLE            bool
+	PHPVersion        string
+	OWASPEnabled      *bool
+	RecaptchaEnabled  *bool
+	EnableHSTSHeaders bool
+	DryRun            bool
 }
 
 type UpdateSiteOptions struct {
-	Domain        string
-	WithWordPress bool
-	PHPVersion    string
-	DryRun        bool
+	Domain            string
+	WithWordPress     bool
+	PHPVersion        string
+	OWASPEnabled      *bool
+	RecaptchaEnabled  *bool
+	EnableHSTSHeaders bool
+	DryRun            bool
 }
 
 type DeleteSiteOptions struct {
@@ -239,6 +257,15 @@ func (s SiteService) CreateSite(ctx context.Context, opts CreateSiteOptions) err
 	if opts.WithLE {
 		s.console.Bullet("Let's Encrypt: enabled")
 	}
+	if opts.OWASPEnabled != nil {
+		s.console.Bullet("OWASP virtual-host mode: " + enabledLabel(*opts.OWASPEnabled))
+	}
+	if opts.RecaptchaEnabled != nil {
+		s.console.Bullet("reCAPTCHA virtual-host mode: " + enabledLabel(*opts.RecaptchaEnabled))
+	}
+	if opts.EnableHSTSHeaders {
+		s.console.Bullet("Security headers in context /: enabled")
+	}
 
 	if opts.DryRun {
 		s.console.Warn("Dry-run enabled: no system changes were made")
@@ -250,7 +277,20 @@ func (s SiteService) CreateSite(ctx context.Context, opts CreateSiteOptions) err
 		s.console.Bullet("write " + vhostDefinition)
 		s.console.Bullet("append virtualhost block into " + serverConfigPath)
 		s.console.Bullet("insert listener map in " + serverConfigPath)
-		s.console.Bullet("apply ownership from OpenLiteSpeed user/group in " + serverConfigPath)
+		s.console.Bullet("align ownership to parent directories for " + siteRoot + " and " + vhostDir)
+		if boolPtrValue(opts.OWASPEnabled) {
+			s.console.Bullet("verify ModSecurity module exists: " + defaultModSecurityModuleFile)
+			s.console.Bullet("verify OWASP rules file exists: " + defaultOWASPModSecRulesFile)
+		}
+		if opts.OWASPEnabled != nil {
+			s.console.Bullet("set virtual-host OWASP mod_security: " + enabledLabel(*opts.OWASPEnabled))
+		}
+		if opts.RecaptchaEnabled != nil {
+			s.console.Bullet("set virtual-host LS reCAPTCHA: " + enabledLabel(*opts.RecaptchaEnabled))
+		}
+		if opts.EnableHSTSHeaders {
+			s.console.Bullet("append recommended security extra headers to context / in " + vhostConfig)
+		}
 		if opts.WithWordPress {
 			s.console.Bullet("download and extract WordPress into " + docRoot)
 			s.console.Bullet("install and activate LiteSpeed Cache plugin via wp-cli")
@@ -295,6 +335,24 @@ func (s SiteService) CreateSite(ctx context.Context, opts CreateSiteOptions) err
 		return apperr.Wrap(apperr.CodeConfig, "failed to write vhost definition", err)
 	}
 
+	if boolPtrValue(opts.OWASPEnabled) {
+		if err := validateOWASPPrerequisites(defaultModSecurityModuleFile, defaultOWASPModSecRulesFile); err != nil {
+			return err
+		}
+	}
+
+	changedSecurity, err := applyVHostSecurityOptions(vhostConfig, vhostSecurityOptions{
+		OWASPEnabled:      opts.OWASPEnabled,
+		RecaptchaEnabled:  opts.RecaptchaEnabled,
+		EnableHSTSHeaders: opts.EnableHSTSHeaders,
+	})
+	if err != nil {
+		return err
+	}
+	if changedSecurity {
+		s.console.Bullet("Applied requested security options in " + vhostConfig)
+	}
+
 	if opts.WithWordPress {
 		if err := ensureWordPressFiles(docRoot); err != nil {
 			return err
@@ -311,8 +369,8 @@ func (s SiteService) CreateSite(ctx context.Context, opts CreateSiteOptions) err
 		}
 	}
 
-	if err := s.applyServerConfiguredOwnership(serverConfigPath, siteRoot, vhostDir); err != nil {
-		s.console.Warn("Could not align site ownership with OpenLiteSpeed user/group: " + err.Error())
+	if err := s.inheritOwnershipFromParent(siteRoot, vhostDir); err != nil {
+		s.console.Warn("Could not align site ownership with parent directory ownership: " + err.Error())
 	}
 
 	if err := s.registerDomainInServerConfig(opts.Domain, siteRoot, vhostConfig, serverConfigPath); err != nil {
@@ -345,6 +403,15 @@ func (s SiteService) CreateSite(ctx context.Context, opts CreateSiteOptions) err
 		}
 	}
 
+	if boolPtrValue(opts.RecaptchaEnabled) {
+		recaptchaEnabled, err := isServerRecaptchaEnabled(serverConfigPath)
+		if err != nil {
+			s.console.Warn("Could not verify server-level reCAPTCHA switch: " + err.Error())
+		} else if !recaptchaEnabled {
+			s.console.Warn("Server-level reCAPTCHA is not enabled. Enable it in server config before vhost-level reCAPTCHA can take effect.")
+		}
+	}
+
 	s.console.Success("Virtual host files created")
 	s.console.Bullet("Virtual host definition: " + vhostDefinition)
 	s.console.Bullet("Virtual host config: " + vhostConfig)
@@ -365,40 +432,86 @@ func (s SiteService) UpdateSitePHP(ctx context.Context, opts UpdateSiteOptions) 
 		return err
 	}
 
-	phpVersion, err := NormalizePHPVersion(opts.PHPVersion)
-	if err != nil {
-		return err
-	}
-
-	info, err := s.detector.Detect(ctx)
-	if err != nil {
-		return err
-	}
-
-	packages := packagesForPHPUpdate(phpVersion)
 	vhostConfig := filepath.Join(s.lswsRoot, "conf", "vhosts", opts.Domain, "vhconf.conf")
 	docRoot := filepath.Join(s.webRoot, opts.Domain, "html")
+	serverConfigPath := filepath.Join(s.lswsRoot, "conf", "httpd_config.conf")
 
-	s.console.Section("Update site PHP")
+	phpRequested := strings.TrimSpace(opts.PHPVersion) != ""
+	securityRequested := opts.OWASPEnabled != nil || opts.RecaptchaEnabled != nil || opts.EnableHSTSHeaders
+
+	if !phpRequested && !opts.WithWordPress && !securityRequested {
+		return apperr.New(apperr.CodeValidation, "no update action requested")
+	}
+	if opts.WithWordPress && !phpRequested {
+		return apperr.New(apperr.CodeValidation, "missing PHP version for --wp update flow")
+	}
+
+	var (
+		phpVersion string
+		packages   []string
+		info       platform.Info
+		err        error
+	)
+	if phpRequested {
+		phpVersion, err = NormalizePHPVersion(opts.PHPVersion)
+		if err != nil {
+			return err
+		}
+		info, err = s.detector.Detect(ctx)
+		if err != nil {
+			return err
+		}
+		packages = packagesForPHPUpdate(phpVersion)
+	}
+
+	s.console.Section("Update site configuration")
 	s.console.Bullet("Domain: " + opts.Domain)
-	s.console.Bullet("Target: lsphp" + phpVersion)
-	s.console.Bullet("Platform: " + info.Summary())
+	if phpRequested {
+		s.console.Bullet("Target PHP: lsphp" + phpVersion)
+		s.console.Bullet("Platform: " + info.Summary())
+	}
 	s.console.Bullet("VHost config: " + vhostConfig)
 	if opts.WithWordPress {
 		s.console.Bullet("WordPress + LiteSpeed Cache reconcile: enabled")
 	}
+	if opts.OWASPEnabled != nil {
+		s.console.Bullet("OWASP virtual-host mode: " + enabledLabel(*opts.OWASPEnabled))
+	}
+	if opts.RecaptchaEnabled != nil {
+		s.console.Bullet("reCAPTCHA virtual-host mode: " + enabledLabel(*opts.RecaptchaEnabled))
+	}
+	if opts.EnableHSTSHeaders {
+		s.console.Bullet("Security headers in context /: enabled")
+	}
 
 	if opts.DryRun {
 		s.console.Warn("Dry-run enabled: no system changes were made")
-		s.console.Info("Planned package install:")
-		for _, pkg := range packages {
-			s.console.Bullet(pkg)
+		if phpRequested {
+			s.console.Info("Planned package install:")
+			for _, pkg := range packages {
+				s.console.Bullet(pkg)
+			}
 		}
 		s.console.Info("Planned config operations:")
-		s.console.Bullet("rewrite PHP handler in " + vhostConfig)
+		if phpRequested {
+			s.console.Bullet("rewrite PHP handler in " + vhostConfig)
+		}
 		if opts.WithWordPress {
 			s.console.Bullet("ensure WordPress files exist in " + docRoot)
 			s.console.Bullet("install and activate LiteSpeed Cache plugin via wp-cli")
+		}
+		if boolPtrValue(opts.OWASPEnabled) {
+			s.console.Bullet("verify ModSecurity module exists: " + defaultModSecurityModuleFile)
+			s.console.Bullet("verify OWASP rules file exists: " + defaultOWASPModSecRulesFile)
+		}
+		if opts.OWASPEnabled != nil {
+			s.console.Bullet("set virtual-host OWASP mod_security: " + enabledLabel(*opts.OWASPEnabled))
+		}
+		if opts.RecaptchaEnabled != nil {
+			s.console.Bullet("set virtual-host LS reCAPTCHA: " + enabledLabel(*opts.RecaptchaEnabled))
+		}
+		if opts.EnableHSTSHeaders {
+			s.console.Bullet("append recommended security extra headers to context / in " + vhostConfig)
 		}
 		s.console.Success("Dry-run plan generated")
 		return nil
@@ -408,17 +521,25 @@ func (s SiteService) UpdateSitePHP(ctx context.Context, opts UpdateSiteOptions) 
 		return apperr.New(apperr.CodeValidation, fmt.Sprintf("virtual host does not exist for %s; expected %s", opts.Domain, vhostConfig))
 	}
 
-	if err := s.ensureRuntimeInstalled(phpVersion); err != nil {
-		return err
+	if boolPtrValue(opts.OWASPEnabled) {
+		if err := validateOWASPPrerequisites(defaultModSecurityModuleFile, defaultOWASPModSecRulesFile); err != nil {
+			return err
+		}
 	}
 
-	installer := platform.NewPackageInstaller(s.runner, info)
-	if err := installer.Install(ctx, packages...); err != nil {
-		return err
-	}
+	if phpRequested {
+		if err := s.ensureRuntimeInstalled(phpVersion); err != nil {
+			return err
+		}
 
-	if err := switchVHostPHPHandler(vhostConfig, phpVersion); err != nil {
-		return err
+		installer := platform.NewPackageInstaller(s.runner, info)
+		if err := installer.Install(ctx, packages...); err != nil {
+			return err
+		}
+
+		if err := switchVHostPHPHandler(vhostConfig, phpVersion); err != nil {
+			return err
+		}
 	}
 
 	if opts.WithWordPress {
@@ -431,9 +552,32 @@ func (s SiteService) UpdateSitePHP(ctx context.Context, opts UpdateSiteOptions) 
 		s.console.Success("WordPress + LiteSpeed Cache reconciled")
 	}
 
-	s.console.Success("Requested PHP package installed")
-	s.console.Success("VHost PHP handler updated")
-	s.console.Bullet("Reload OpenLiteSpeed to apply handler changes")
+	securityChanged, err := applyVHostSecurityOptions(vhostConfig, vhostSecurityOptions{
+		OWASPEnabled:      opts.OWASPEnabled,
+		RecaptchaEnabled:  opts.RecaptchaEnabled,
+		EnableHSTSHeaders: opts.EnableHSTSHeaders,
+	})
+	if err != nil {
+		return err
+	}
+
+	if boolPtrValue(opts.RecaptchaEnabled) {
+		recaptchaEnabled, err := isServerRecaptchaEnabled(serverConfigPath)
+		if err != nil {
+			s.console.Warn("Could not verify server-level reCAPTCHA switch: " + err.Error())
+		} else if !recaptchaEnabled {
+			s.console.Warn("Server-level reCAPTCHA is not enabled. Enable it in server config before vhost-level reCAPTCHA can take effect.")
+		}
+	}
+
+	if phpRequested {
+		s.console.Success("Requested PHP package installed")
+		s.console.Success("VHost PHP handler updated")
+	}
+	if securityChanged {
+		s.console.Success("Requested security options applied to vhost config")
+	}
+	s.console.Bullet("Reload OpenLiteSpeed to apply configuration changes")
 	return nil
 }
 
@@ -1138,6 +1282,346 @@ func switchVHostPHPHandler(vhostConfigPath, phpVersion string) error {
 	return nil
 }
 
+type vhostSecurityOptions struct {
+	OWASPEnabled      *bool
+	RecaptchaEnabled  *bool
+	EnableHSTSHeaders bool
+}
+
+func boolPtrValue(v *bool) bool {
+	return v != nil && *v
+}
+
+func enabledLabel(v bool) string {
+	if v {
+		return "enabled"
+	}
+	return "disabled"
+}
+
+func validateOWASPPrerequisites(modulePath, rulesPath string) error {
+	if !fileExists(modulePath) {
+		return apperr.New(apperr.CodeValidation, fmt.Sprintf("ModSecurity module not found at %s; install ols-modsecurity first", modulePath))
+	}
+	if !fileExists(rulesPath) {
+		return apperr.New(apperr.CodeValidation, fmt.Sprintf("OWASP rules file not found at %s; enable OWASP rules before toggling vhost OWASP", rulesPath))
+	}
+	return nil
+}
+
+func isTruthyDirectiveValue(v string) bool {
+	switch strings.TrimSpace(strings.ToLower(v)) {
+	case "1", "on", "yes", "true":
+		return true
+	default:
+		return false
+	}
+}
+
+func isServerRecaptchaEnabled(serverConfigPath string) (bool, error) {
+	b, err := os.ReadFile(serverConfigPath)
+	if err != nil {
+		return false, apperr.Wrap(apperr.CodeConfig, "failed to read OpenLiteSpeed server config", err)
+	}
+	lines := strings.Split(string(b), "\n")
+	start, end := findBlockByKey(lines, "lsrecaptcha")
+	if start < 0 || end < 0 {
+		return false, nil
+	}
+	for _, line := range lines[start+1 : end] {
+		trimmed := strings.TrimSpace(line)
+		fields := strings.Fields(trimmed)
+		if len(fields) < 2 || !strings.EqualFold(fields[0], "enabled") {
+			continue
+		}
+		return isTruthyDirectiveValue(fields[1]), nil
+	}
+	return false, nil
+}
+
+func applyVHostSecurityOptions(vhostConfigPath string, opts vhostSecurityOptions) (bool, error) {
+	if opts.OWASPEnabled == nil && opts.RecaptchaEnabled == nil && !opts.EnableHSTSHeaders {
+		return false, nil
+	}
+
+	b, err := os.ReadFile(vhostConfigPath)
+	if err != nil {
+		return false, apperr.Wrap(apperr.CodeConfig, "failed to read vhost config for security updates", err)
+	}
+
+	lines := strings.Split(string(b), "\n")
+	changed := false
+
+	if opts.OWASPEnabled != nil {
+		updated, blockChanged, err := upsertVHostOWASPBlock(lines, *opts.OWASPEnabled)
+		if err != nil {
+			return false, err
+		}
+		lines = updated
+		changed = changed || blockChanged
+	}
+
+	if opts.RecaptchaEnabled != nil {
+		updated, blockChanged, err := upsertVHostRecaptchaBlock(lines, *opts.RecaptchaEnabled)
+		if err != nil {
+			return false, err
+		}
+		lines = updated
+		changed = changed || blockChanged
+	}
+
+	if opts.EnableHSTSHeaders {
+		updated, headersChanged, err := ensureRootContextExtraHeaders(lines, defaultHSTSSecurityHeaders)
+		if err != nil {
+			return false, err
+		}
+		lines = updated
+		changed = changed || headersChanged
+	}
+
+	if !changed {
+		return false, nil
+	}
+
+	if err := os.WriteFile(vhostConfigPath, []byte(strings.Join(lines, "\n")), 0o644); err != nil {
+		return false, apperr.Wrap(apperr.CodeConfig, "failed to write vhost security configuration", err)
+	}
+	return true, nil
+}
+
+func appendBlock(lines, block []string) []string {
+	out := append([]string{}, lines...)
+	if len(out) > 0 && strings.TrimSpace(out[len(out)-1]) != "" {
+		out = append(out, "")
+	}
+	out = append(out, block...)
+	return out
+}
+
+func replaceBlock(lines []string, start, end int, block []string) []string {
+	updated := append([]string{}, lines[:start]...)
+	updated = append(updated, block...)
+	updated = append(updated, lines[end+1:]...)
+	return updated
+}
+
+func buildVHostOWASPBlock(enabled bool) []string {
+	status := "off"
+	if enabled {
+		status = "on"
+	}
+
+	lines := []string{
+		"module mod_security {",
+		formatDirectiveLine("  ", "modsecurity", status),
+	}
+	if enabled {
+		lines = append(lines,
+			"  modsecurity_rules       `",
+			"  SecRuleEngine On",
+			"  `",
+			formatDirectiveLine("  ", "modsecurity_rules_file", defaultOWASPModSecRulesFile),
+			formatDirectiveLine("  ", "ls_enabled", "1"),
+		)
+	}
+	lines = append(lines, "}")
+	return lines
+}
+
+func hasModSecurityRulesDirective(lines []string) bool {
+	for _, line := range lines {
+		fields := strings.Fields(strings.TrimSpace(line))
+		if len(fields) > 0 && fields[0] == "modsecurity_rules" {
+			return true
+		}
+	}
+	return false
+}
+
+func upsertVHostOWASPBlock(lines []string, enabled bool) ([]string, bool, error) {
+	start, end := findBlockByKey(lines, "module mod_security")
+	if start < 0 || end < 0 {
+		return appendBlock(lines, buildVHostOWASPBlock(enabled)), true, nil
+	}
+
+	body := append([]string{}, lines[start+1:end]...)
+	originalBody := strings.Join(body, "\n")
+	state := "off"
+	if enabled {
+		state = "on"
+	}
+	updatedBody, _ := upsertDirective(body, "modsecurity", state)
+
+	if enabled {
+		updatedBody, _ = upsertDirective(updatedBody, "modsecurity_rules_file", defaultOWASPModSecRulesFile)
+		updatedBody, _ = upsertDirective(updatedBody, "ls_enabled", "1")
+		if !hasModSecurityRulesDirective(updatedBody) {
+			indent := detectDirectiveIndent(updatedBody)
+			if indent == "" {
+				indent = "  "
+			}
+			updatedBody = append(updatedBody,
+				indent+"modsecurity_rules       `",
+				indent+"SecRuleEngine On",
+				indent+"`",
+			)
+		}
+	}
+
+	if strings.Join(updatedBody, "\n") == originalBody {
+		return lines, false, nil
+	}
+
+	newBlock := []string{lines[start]}
+	newBlock = append(newBlock, updatedBody...)
+	newBlock = append(newBlock, lines[end])
+	return replaceBlock(lines, start, end, newBlock), true, nil
+}
+
+func buildVHostRecaptchaBlock(enabled bool) []string {
+	value := "0"
+	if enabled {
+		value = "1"
+	}
+	return []string{
+		"lsrecaptcha  {",
+		formatDirectiveLine("  ", "enabled", value),
+		"}",
+	}
+}
+
+func upsertVHostRecaptchaBlock(lines []string, enabled bool) ([]string, bool, error) {
+	start, end := findBlockByKey(lines, "lsrecaptcha")
+	if start < 0 || end < 0 {
+		return appendBlock(lines, buildVHostRecaptchaBlock(enabled)), true, nil
+	}
+
+	body := append([]string{}, lines[start+1:end]...)
+	value := "0"
+	if enabled {
+		value = "1"
+	}
+	updatedBody, changed := upsertDirective(body, "enabled", value)
+	if !changed {
+		return lines, false, nil
+	}
+	newBlock := []string{lines[start]}
+	newBlock = append(newBlock, updatedBody...)
+	newBlock = append(newBlock, lines[end])
+	return replaceBlock(lines, start, end, newBlock), true, nil
+}
+
+func findExtraHeadersBlock(lines []string) (int, int, string) {
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "extraHeaders") || !strings.Contains(trimmed, "<<<") {
+			continue
+		}
+		parts := strings.SplitN(trimmed, "<<<", 2)
+		token := strings.TrimSpace(parts[1])
+		if token == "" {
+			token = "END_extraHeaders"
+		}
+		for j := i + 1; j < len(lines); j++ {
+			if strings.TrimSpace(lines[j]) == token {
+				return i, j, token
+			}
+		}
+		return i, -1, token
+	}
+	return -1, -1, ""
+}
+
+func normalizeHeaderLines(lines []string) []string {
+	out := make([]string, 0, len(lines))
+	seen := map[string]struct{}{}
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		key := strings.ToLower(trimmed)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, trimmed)
+	}
+	return out
+}
+
+func sameStringSlice(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func ensureRootContextExtraHeaders(lines []string, requiredHeaders []string) ([]string, bool, error) {
+	start, end := findBlockByKey(lines, "context /")
+	if start < 0 || end < 0 {
+		return nil, false, apperr.New(apperr.CodeValidation, "context / block not found in vhost config; cannot apply HSTS/security headers")
+	}
+
+	body := append([]string{}, lines[start+1:end]...)
+	headerStart, headerEnd, _ := findExtraHeadersBlock(body)
+
+	if headerStart >= 0 && headerEnd < 0 {
+		return nil, false, apperr.New(apperr.CodeConfig, "malformed extraHeaders block in context /")
+	}
+
+	if headerStart < 0 {
+		newBlock := []string{
+			formatDirectiveLine("  ", "extraHeaders", "<<<END_extraHeaders"),
+		}
+		newBlock = append(newBlock, requiredHeaders...)
+		newBlock = append(newBlock, "  END_extraHeaders")
+		if len(body) > 0 && strings.TrimSpace(body[len(body)-1]) != "" {
+			body = append(body, "")
+		}
+		body = append(body, newBlock...)
+
+		newContext := []string{lines[start]}
+		newContext = append(newContext, body...)
+		newContext = append(newContext, lines[end])
+		return replaceBlock(lines, start, end, newContext), true, nil
+	}
+
+	existingHeaders := normalizeHeaderLines(body[headerStart+1 : headerEnd])
+	merged := append([]string{}, existingHeaders...)
+	seen := map[string]struct{}{}
+	for _, line := range existingHeaders {
+		seen[strings.ToLower(strings.TrimSpace(line))] = struct{}{}
+	}
+	for _, header := range requiredHeaders {
+		key := strings.ToLower(strings.TrimSpace(header))
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		merged = append(merged, header)
+	}
+
+	if sameStringSlice(existingHeaders, merged) {
+		return lines, false, nil
+	}
+
+	newHeadersBlock := []string{body[headerStart]}
+	newHeadersBlock = append(newHeadersBlock, merged...)
+	newHeadersBlock = append(newHeadersBlock, body[headerEnd])
+	updatedBody := replaceBlock(body, headerStart, headerEnd, newHeadersBlock)
+
+	newContext := []string{lines[start]}
+	newContext = append(newContext, updatedBody...)
+	newContext = append(newContext, lines[end])
+	return replaceBlock(lines, start, end, newContext), true, nil
+}
+
 func precheckLEDomainReachability(domain string) (bool, string) {
 	client := &http.Client{Timeout: 8 * time.Second}
 	resp, err := client.Get("http://" + domain + "/")
@@ -1399,13 +1883,27 @@ func inheritPathOwnershipFromParent(path string) error {
 
 	currentUID, currentGID, hasCurrentOwner := fileOwnership(info)
 	if hasCurrentOwner && currentUID == targetUID && currentGID == targetGID {
+		if !info.IsDir() {
+			return nil
+		}
+	}
+
+	if !info.IsDir() {
+		if err := chownPath(cleanPath, targetUID, targetGID); err != nil {
+			return apperr.Wrap(apperr.CodeConfig, "failed to align ownership with parent", err)
+		}
 		return nil
 	}
 
-	if err := chownPath(cleanPath, targetUID, targetGID); err != nil {
-		return apperr.Wrap(apperr.CodeConfig, "failed to align ownership with parent", err)
-	}
-	return nil
+	return filepath.WalkDir(cleanPath, func(currentPath string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if err := chownPath(currentPath, targetUID, targetGID); err != nil {
+			return err
+		}
+		return nil
+	})
 }
 
 func (s SiteService) applyServerConfiguredOwnership(serverConfigPath string, paths ...string) error {
