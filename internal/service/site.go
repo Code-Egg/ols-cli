@@ -312,7 +312,7 @@ func (s SiteService) CreateSite(ctx context.Context, opts CreateSiteOptions) err
 		s.console.Bullet("write " + vhostDefinition)
 		s.console.Bullet("append virtualhost block into " + serverConfigPath)
 		s.console.Bullet("insert listener map in " + serverConfigPath)
-		s.console.Bullet("align ownership to parent directories for " + siteRoot + " and " + vhostDir)
+		s.console.Bullet("align ownership to OpenLiteSpeed server user/group for " + siteRoot + " and " + vhostDir)
 		if opts.OWASPEnabled != nil {
 			s.console.Bullet("set virtual-host OWASP mod_security: " + enabledLabel(*opts.OWASPEnabled))
 		}
@@ -415,8 +415,11 @@ func (s SiteService) CreateSite(ctx context.Context, opts CreateSiteOptions) err
 		}
 	}
 
-	if err := s.inheritOwnershipFromParent(siteRoot, vhostDir); err != nil {
-		s.console.Warn("Could not align site ownership with parent directory ownership: " + err.Error())
+	if err := s.applyServerConfiguredOwnership(serverConfigPath, siteRoot, vhostDir); err != nil {
+		s.console.Warn("Could not align site ownership with OpenLiteSpeed user/group from server config: " + err.Error())
+		if err := s.inheritOwnershipFromParent(siteRoot, vhostDir); err != nil {
+			s.console.Warn("Could not align site ownership with parent directory ownership: " + err.Error())
+		}
 	}
 
 	if err := s.registerDomainInServerConfig(opts.Domain, siteRoot, vhostConfig, serverConfigPath); err != nil {
