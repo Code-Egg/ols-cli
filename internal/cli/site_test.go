@@ -116,6 +116,8 @@ func TestSiteCreateFlagOrder(t *testing.T) {
 		"enable-recaptcha",
 		"disable-owasp",
 		"disable-recaptcha",
+		"enable-ns",
+		"disable-ns",
 		"hsts",
 	}
 	if len(got) < len(wantPrefix) {
@@ -151,6 +153,8 @@ func TestSiteUpdateFlagOrder(t *testing.T) {
 		"enable-recaptcha",
 		"disable-owasp",
 		"disable-recaptcha",
+		"enable-ns",
+		"disable-ns",
 		"hsts",
 	}
 	if len(got) < len(wantPrefix) {

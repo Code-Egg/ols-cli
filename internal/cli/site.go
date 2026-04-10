@@ -110,6 +110,7 @@ func newSiteCreateCmd(svc siteManager, rootOpts *rootOptions) *cobra.Command {
 	var withWordPress bool
 	var withLE bool
 	var withHSTS bool
+	namespace := &toggleFlags{}
 
 	cmd := &cobra.Command{
 		Use:   "create <domain>",
@@ -131,6 +132,10 @@ func newSiteCreateCmd(svc siteManager, rootOpts *rootOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			namespaceEnabled, err := namespace.selected("ns")
+			if err != nil {
+				return err
+			}
 			err = svc.CreateSite(cmd.Context(), service.CreateSiteOptions{
 				Domain:            args[0],
 				WithWordPress:     withWordPress,
@@ -138,6 +143,7 @@ func newSiteCreateCmd(svc siteManager, rootOpts *rootOptions) *cobra.Command {
 				PHPVersion:        phpVersion,
 				OWASPEnabled:      owaspEnabled,
 				RecaptchaEnabled:  recaptchaEnabled,
+				NamespaceEnabled:  namespaceEnabled,
 				EnableHSTSHeaders: withHSTS,
 				DryRun:            rootOpts.DryRun,
 			})
@@ -156,6 +162,8 @@ func newSiteCreateCmd(svc siteManager, rootOpts *rootOptions) *cobra.Command {
 	cmd.Flags().BoolVar(&recaptcha.enable, "enable-recaptcha", false, "enable reCAPTCHA at virtual host level")
 	cmd.Flags().BoolVar(&owasp.disable, "disable-owasp", false, "disable OWASP ModSecurity at virtual host level")
 	cmd.Flags().BoolVar(&recaptcha.disable, "disable-recaptcha", false, "disable reCAPTCHA at virtual host level")
+	cmd.Flags().BoolVar(&namespace.enable, "enable-ns", false, "enable namespace at virtual host level")
+	cmd.Flags().BoolVar(&namespace.disable, "disable-ns", false, "disable namespace at virtual host level")
 	cmd.Flags().BoolVar(&withHSTS, "hsts", false, "add recommended security extra headers to static context /")
 	return cmd
 }
@@ -166,6 +174,7 @@ func newSiteUpdateCmd(svc siteManager, rootOpts *rootOptions) *cobra.Command {
 	recaptcha := &toggleFlags{}
 	var withWordPress bool
 	var withHSTS bool
+	namespace := &toggleFlags{}
 
 	cmd := &cobra.Command{
 		Use:   "update <domain>",
@@ -188,11 +197,16 @@ func newSiteUpdateCmd(svc siteManager, rootOpts *rootOptions) *cobra.Command {
 				return err
 			}
 
+			namespaceEnabled, err := namespace.selected("ns")
+			if err != nil {
+				return err
+			}
+
 			if withWordPress && phpVersion == "" {
 				return apperr.New(apperr.CodeValidation, "missing PHP version flag for --wp; provide one of --php81/--php82/--php83/--php84/--php85")
 			}
-			if phpVersion == "" && !withWordPress && owaspEnabled == nil && recaptchaEnabled == nil && !withHSTS {
-				return apperr.New(apperr.CodeValidation, "no update action provided; pass PHP version and/or security flags such as --enable-owasp, --enable-recaptcha, --disable-owasp, --disable-recaptcha, --hsts")
+			if phpVersion == "" && !withWordPress && owaspEnabled == nil && recaptchaEnabled == nil && namespaceEnabled == nil && !withHSTS {
+				return apperr.New(apperr.CodeValidation, "no update action provided; pass PHP version and/or security flags such as --enable-owasp, --enable-recaptcha, --disable-owasp, --disable-recaptcha, --enable-ns, --disable-ns, --hsts")
 			}
 			err = svc.UpdateSitePHP(cmd.Context(), service.UpdateSiteOptions{
 				Domain:            args[0],
@@ -200,6 +214,7 @@ func newSiteUpdateCmd(svc siteManager, rootOpts *rootOptions) *cobra.Command {
 				PHPVersion:        phpVersion,
 				OWASPEnabled:      owaspEnabled,
 				RecaptchaEnabled:  recaptchaEnabled,
+				NamespaceEnabled:  namespaceEnabled,
 				EnableHSTSHeaders: withHSTS,
 				DryRun:            rootOpts.DryRun,
 			})
@@ -217,6 +232,8 @@ func newSiteUpdateCmd(svc siteManager, rootOpts *rootOptions) *cobra.Command {
 	cmd.Flags().BoolVar(&recaptcha.enable, "enable-recaptcha", false, "enable reCAPTCHA at virtual host level")
 	cmd.Flags().BoolVar(&owasp.disable, "disable-owasp", false, "disable OWASP ModSecurity at virtual host level")
 	cmd.Flags().BoolVar(&recaptcha.disable, "disable-recaptcha", false, "disable reCAPTCHA at virtual host level")
+	cmd.Flags().BoolVar(&namespace.enable, "enable-ns", false, "enable namespace at virtual host level")
+	cmd.Flags().BoolVar(&namespace.disable, "disable-ns", false, "disable namespace at virtual host level")
 	cmd.Flags().BoolVar(&withHSTS, "hsts", false, "add recommended security extra headers to static context /")
 	return cmd
 }

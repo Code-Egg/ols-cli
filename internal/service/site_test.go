@@ -41,6 +41,10 @@ func boolPtr(v bool) *bool {
 	return &v
 }
 
+func ptr[T any](v T) *T {
+	return &v
+}
+
 func TestNormalizePHPVersion(t *testing.T) {
 	v, err := NormalizePHPVersion("8.2")
 	if err != nil {
@@ -74,11 +78,12 @@ func TestCreateSiteDryRun(t *testing.T) {
 	)
 
 	err := svc.CreateSite(context.Background(), CreateSiteOptions{
-		Domain:        "example.com",
-		WithWordPress: true,
-		WithLE:        true,
-		PHPVersion:    "82",
-		DryRun:        true,
+		Domain:           "example.com",
+		WithWordPress:    true,
+		WithLE:           true,
+		PHPVersion:       "82",
+		NamespaceEnabled: ptr(true),
+		DryRun:           true,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -333,6 +338,7 @@ func TestUpdateSiteSecurityOnlyWithoutPHP(t *testing.T) {
 	err := svc.UpdateSitePHP(context.Background(), UpdateSiteOptions{
 		Domain:           "example.com",
 		RecaptchaEnabled: boolPtr(true),
+		NamespaceEnabled: ptr(true),
 	})
 	if err != nil {
 		t.Fatalf("unexpected update error: %v", err)
@@ -355,6 +361,9 @@ func TestUpdateSiteSecurityOnlyWithoutPHP(t *testing.T) {
 	if !strings.Contains(content, "regConnLimit             500") {
 		t.Fatalf("expected recaptcha regConnLimit 500 in vhconf, got: %s", content)
 	}
+	if !strings.Contains(content, "namespace                2") {
+		t.Fatalf("expected namespace directive enabled in vhconf, got: %s", content)
+	}
 }
 
 func TestApplyVHostSecurityOptionsEnableAndDisable(t *testing.T) {
@@ -366,6 +375,7 @@ func TestApplyVHostSecurityOptionsEnableAndDisable(t *testing.T) {
 	changed, err := applyVHostSecurityOptions(vhostPath, vhostSecurityOptions{
 		OWASPEnabled:      boolPtr(true),
 		RecaptchaEnabled:  boolPtr(true),
+		NamespaceEnabled:  boolPtr(true),
 		EnableHSTSHeaders: true,
 	})
 	if err != nil {
@@ -389,6 +399,9 @@ func TestApplyVHostSecurityOptionsEnableAndDisable(t *testing.T) {
 	if !strings.Contains(content, "type                     1") || !strings.Contains(content, "regConnLimit             500") {
 		t.Fatalf("expected recaptcha type/limit in block, got: %s", content)
 	}
+	if !strings.Contains(content, "namespace                2") {
+		t.Fatalf("expected namespace directive enabled, got: %s", content)
+	}
 	if !strings.Contains(content, "extraHeaders") || !strings.Contains(content, "Strict-Transport-Security") {
 		t.Fatalf("expected security headers block, got: %s", content)
 	}
@@ -396,6 +409,7 @@ func TestApplyVHostSecurityOptionsEnableAndDisable(t *testing.T) {
 	changed, err = applyVHostSecurityOptions(vhostPath, vhostSecurityOptions{
 		OWASPEnabled:     boolPtr(false),
 		RecaptchaEnabled: boolPtr(false),
+		NamespaceEnabled: boolPtr(false),
 	})
 	if err != nil {
 		t.Fatalf("unexpected disable apply error: %v", err)
@@ -414,6 +428,9 @@ func TestApplyVHostSecurityOptionsEnableAndDisable(t *testing.T) {
 	}
 	if strings.Contains(content, "lsrecaptcha") {
 		t.Fatalf("expected recaptcha block removed when disabled, got: %s", content)
+	}
+	if strings.Contains(content, "namespace") {
+		t.Fatalf("expected namespace directive removed when disabled, got: %s", content)
 	}
 }
 

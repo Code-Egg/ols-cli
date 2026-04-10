@@ -127,6 +127,7 @@ type CreateSiteOptions struct {
 	PHPVersion        string
 	OWASPEnabled      *bool
 	RecaptchaEnabled  *bool
+	NamespaceEnabled  *bool
 	EnableHSTSHeaders bool
 	DryRun            bool
 }
@@ -137,6 +138,7 @@ type UpdateSiteOptions struct {
 	PHPVersion        string
 	OWASPEnabled      *bool
 	RecaptchaEnabled  *bool
+	NamespaceEnabled  *bool
 	EnableHSTSHeaders bool
 	DryRun            bool
 }
@@ -291,6 +293,9 @@ func (s SiteService) CreateSite(ctx context.Context, opts CreateSiteOptions) err
 	if opts.RecaptchaEnabled != nil {
 		s.console.Bullet("reCAPTCHA virtual-host mode: " + enabledLabel(*opts.RecaptchaEnabled))
 	}
+	if opts.NamespaceEnabled != nil {
+		s.console.Bullet("Namespace virtual-host mode: " + enabledLabel(*opts.NamespaceEnabled))
+	}
 	if opts.EnableHSTSHeaders {
 		s.console.Bullet("Security headers in context /: enabled")
 	}
@@ -311,6 +316,9 @@ func (s SiteService) CreateSite(ctx context.Context, opts CreateSiteOptions) err
 		}
 		if opts.RecaptchaEnabled != nil {
 			s.console.Bullet("set virtual-host LS reCAPTCHA: " + enabledLabel(*opts.RecaptchaEnabled))
+		}
+		if opts.NamespaceEnabled != nil {
+			s.console.Bullet("set virtual-host namespace: " + enabledLabel(*opts.NamespaceEnabled))
 		}
 		if opts.EnableHSTSHeaders {
 			s.console.Bullet("append recommended security extra headers to context / in " + vhostConfig)
@@ -374,6 +382,7 @@ func (s SiteService) CreateSite(ctx context.Context, opts CreateSiteOptions) err
 	changedSecurity, err := applyVHostSecurityOptions(vhostConfig, vhostSecurityOptions{
 		OWASPEnabled:      opts.OWASPEnabled,
 		RecaptchaEnabled:  opts.RecaptchaEnabled,
+		NamespaceEnabled:  opts.NamespaceEnabled,
 		RecaptchaType:     recaptchaType,
 		RecaptchaReqLimit: recaptchaReqLimit,
 		EnableHSTSHeaders: opts.EnableHSTSHeaders,
@@ -469,7 +478,7 @@ func (s SiteService) UpdateSitePHP(ctx context.Context, opts UpdateSiteOptions) 
 	serverConfigPath := filepath.Join(s.lswsRoot, "conf", "httpd_config.conf")
 
 	phpRequested := strings.TrimSpace(opts.PHPVersion) != ""
-	securityRequested := opts.OWASPEnabled != nil || opts.RecaptchaEnabled != nil || opts.EnableHSTSHeaders
+	securityRequested := opts.OWASPEnabled != nil || opts.RecaptchaEnabled != nil || opts.NamespaceEnabled != nil || opts.EnableHSTSHeaders
 
 	if !phpRequested && !opts.WithWordPress && !securityRequested {
 		return apperr.New(apperr.CodeValidation, "no update action requested")
@@ -512,6 +521,9 @@ func (s SiteService) UpdateSitePHP(ctx context.Context, opts UpdateSiteOptions) 
 	if opts.RecaptchaEnabled != nil {
 		s.console.Bullet("reCAPTCHA virtual-host mode: " + enabledLabel(*opts.RecaptchaEnabled))
 	}
+	if opts.NamespaceEnabled != nil {
+		s.console.Bullet("Namespace virtual-host mode: " + enabledLabel(*opts.NamespaceEnabled))
+	}
 	if opts.EnableHSTSHeaders {
 		s.console.Bullet("Security headers in context /: enabled")
 	}
@@ -537,6 +549,9 @@ func (s SiteService) UpdateSitePHP(ctx context.Context, opts UpdateSiteOptions) 
 		}
 		if opts.RecaptchaEnabled != nil {
 			s.console.Bullet("set virtual-host LS reCAPTCHA: " + enabledLabel(*opts.RecaptchaEnabled))
+		}
+		if opts.NamespaceEnabled != nil {
+			s.console.Bullet("set virtual-host namespace: " + enabledLabel(*opts.NamespaceEnabled))
 		}
 		if opts.EnableHSTSHeaders {
 			s.console.Bullet("append recommended security extra headers to context / in " + vhostConfig)
@@ -589,6 +604,7 @@ func (s SiteService) UpdateSitePHP(ctx context.Context, opts UpdateSiteOptions) 
 	securityChanged, err := applyVHostSecurityOptions(vhostConfig, vhostSecurityOptions{
 		OWASPEnabled:      opts.OWASPEnabled,
 		RecaptchaEnabled:  opts.RecaptchaEnabled,
+		NamespaceEnabled:  opts.NamespaceEnabled,
 		RecaptchaType:     recaptchaType,
 		RecaptchaReqLimit: recaptchaReqLimit,
 		EnableHSTSHeaders: opts.EnableHSTSHeaders,
@@ -1347,6 +1363,7 @@ func switchVHostPHPHandler(vhostConfigPath, phpVersion string) error {
 type vhostSecurityOptions struct {
 	OWASPEnabled      *bool
 	RecaptchaEnabled  *bool
+	NamespaceEnabled  *bool
 	RecaptchaType     int
 	RecaptchaReqLimit int
 	EnableHSTSHeaders bool
@@ -1753,7 +1770,7 @@ func (s SiteService) ensureServerSecurityDefaults(serverConfigPath string) error
 }
 
 func applyVHostSecurityOptions(vhostConfigPath string, opts vhostSecurityOptions) (bool, error) {
-	if opts.OWASPEnabled == nil && opts.RecaptchaEnabled == nil && !opts.EnableHSTSHeaders {
+	if opts.OWASPEnabled == nil && opts.RecaptchaEnabled == nil && opts.NamespaceEnabled == nil && !opts.EnableHSTSHeaders {
 		return false, nil
 	}
 
@@ -1789,6 +1806,12 @@ func applyVHostSecurityOptions(vhostConfigPath string, opts vhostSecurityOptions
 		}
 		lines = updated
 		changed = changed || blockChanged
+	}
+
+	if opts.NamespaceEnabled != nil {
+		updated, namespaceChanged := upsertVHostNamespaceDirective(lines, *opts.NamespaceEnabled)
+		lines = updated
+		changed = changed || namespaceChanged
 	}
 
 	if opts.EnableHSTSHeaders {
@@ -1888,6 +1911,13 @@ func upsertVHostRecaptchaBlock(lines []string, enabled bool, recaptchaType, reqL
 		return lines, false, nil
 	}
 	return removeBlock(lines, start, end), true, nil
+}
+
+func upsertVHostNamespaceDirective(lines []string, enabled bool) ([]string, bool) {
+	if enabled {
+		return upsertDirective(lines, "namespace", "2")
+	}
+	return removeDirective(lines, "namespace")
 }
 
 func findExtraHeadersBlock(lines []string) (int, int, string) {
@@ -2807,7 +2837,7 @@ func buildVHostDefinition(domain, siteRoot, vhostConfigPath string) string {
 }
 
 func buildVHConfig(phpVersion string) string {
-	return fmt.Sprintf("docRoot                   $VH_ROOT/html/\n\nindex  {\n  useServer               0\n  indexFiles              index.php, index.html\n}\n\ncontext / {\n  type                    null\n  location                $DOC_ROOT/\n  allowBrowse             1\n}\n\nextprocessor lsphp%s {\n  type                    lsapi\n  address                 uds://tmp/lshttpd/lsphp%s.sock\n  maxConns                35\n  env                     PHP_LSAPI_CHILDREN=35\n  initTimeout             60\n  retryTimeout            0\n  persistConn             1\n  pcKeepAliveTimeout      1\n  respBuffer              0\n  autoStart               2\n  path                    /usr/local/lsws/lsphp%s/bin/lsphp\n  backlog                 100\n  instances               1\n  priority                0\n  memSoftLimit            2047M\n  memHardLimit            2047M\n  procSoftLimit           400\n  procHardLimit           500\n}\n\nscriptHandler  {\n  add                     lsapi:lsphp%s php\n}\n\nrewrite  {\n  enable                  1\n  autoLoadHtaccess        1\n}\n", phpVersion, phpVersion, phpVersion, phpVersion)
+	return fmt.Sprintf("docRoot                   $VH_ROOT/html/\n\nindex  {\n  useServer               0\n  indexFiles              index.php, index.html\n}\n\ncontext / {\n  type                    null\n  location                $DOC_ROOT/\n  allowBrowse             1\n}\n\nextprocessor lsphp%s {\n  type                    lsapi\n  address                 uds://tmp/lshttpd/lsphp%s.sock\n  maxConns                35\n  env                     PHP_LSAPI_CHILDREN=35\n  env                     LSAPI_AVOID_FORK=200M\n  initTimeout             60\n  retryTimeout            0\n  persistConn             1\n  pcKeepAliveTimeout      1\n  respBuffer              0\n  autoStart               2\n  path                    /usr/local/lsws/lsphp%s/bin/lsphp\n  backlog                 100\n  instances               1\n  priority                0\n  memSoftLimit            0\n  memHardLimit            0\n  procSoftLimit           0\n  procHardLimit           0\n}\n\nscriptHandler  {\n  add                     lsapi:lsphp%s php\n}\n\nrewrite  {\n  enable                  1\n  autoLoadHtaccess        1\n}\n", phpVersion, phpVersion, phpVersion, phpVersion)
 }
 
 func NormalizePHPVersion(in string) (string, error) {
