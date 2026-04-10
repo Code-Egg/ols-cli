@@ -59,8 +59,8 @@ func NewRootCmd() *cobra.Command {
 	})
 
 	cmd.AddCommand(newInstallCmd(svc, opts))
-	cmd.AddCommand(newUpdateCmd(svc, opts))
 	cmd.AddCommand(newSiteCmd(svc, opts))
+	cmd.AddCommand(newUpdateCmd(svc, opts))
 	cmd.SetHelpCommand(newRootHelpCmd(cmd))
 	applyColorHelpTemplate(cmd)
 	return wrapErrors(cmd)
