@@ -126,10 +126,10 @@ ols site (command) [options]
 | --- | --- | --- |
 | `create` | Create a new site/vhost | `--wp` `--le` `--php81` `--php82` `--php83` `--php84` `--php85` `--enable-owasp` `--disable-owasp` `--enable-recaptcha` `--disable-recaptcha` `--enable-ns` `--disable-ns` `--hsts` |
 | `update` | Update an existing site (PHP target optional when only WordPress/security/LE flags are used) | optional `--wp`, optional `--le`, optional PHP target: `--php81` `--php82` `--php83` `--php84` `--php85`, or security flags: `--enable-owasp` `--disable-owasp` `--enable-recaptcha` `--disable-recaptcha` `--enable-ns` `--disable-ns` `--hsts` |
-| `enable` | Enable site by removing domain from server-level `suspendedVhosts` |  |
-| `disable` | Disable site by adding domain to server-level `suspendedVhosts` |  |
+| `enable` | Enable site from server-level |  |
+| `disable` | Disable site from server-level |  |
 | `info` | Show site metadata and detected status |  |
-| `show` | Print OLS virtual host config (`vhconf.conf`) |  |
+| `show` | Print OLS virtual host config |  |
 | `list` | List managed sites discovered from OLS vhost directory |  |
 | `delete` | Remove site config/files and optionally keep DB | `--keep-db` |
 
