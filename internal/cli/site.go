@@ -173,6 +173,7 @@ func newSiteUpdateCmd(svc siteManager, rootOpts *rootOptions) *cobra.Command {
 	owasp := &toggleFlags{}
 	recaptcha := &toggleFlags{}
 	var withWordPress bool
+	var withLE bool
 	var withHSTS bool
 	namespace := &toggleFlags{}
 
@@ -181,7 +182,8 @@ func newSiteUpdateCmd(svc siteManager, rootOpts *rootOptions) *cobra.Command {
 		Short: "Update existing site configuration",
 		Example: "ols site update example.com --php83\n" +
 			"ols site update example.com --enable-owasp --enable-recaptcha\n" +
-			"ols --dry-run site update example.com --wp --php85 --hsts",
+			"ols site update example.com --le\n" +
+			"ols --dry-run site update example.com --wp --php85 --hsts --le",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			phpVersion, err := php.selected("")
@@ -205,12 +207,13 @@ func newSiteUpdateCmd(svc siteManager, rootOpts *rootOptions) *cobra.Command {
 			if withWordPress && phpVersion == "" {
 				return apperr.New(apperr.CodeValidation, "missing PHP version flag for --wp; provide one of --php81/--php82/--php83/--php84/--php85")
 			}
-			if phpVersion == "" && !withWordPress && owaspEnabled == nil && recaptchaEnabled == nil && namespaceEnabled == nil && !withHSTS {
-				return apperr.New(apperr.CodeValidation, "no update action provided; pass PHP version and/or security flags such as --enable-owasp, --enable-recaptcha, --disable-owasp, --disable-recaptcha, --enable-ns, --disable-ns, --hsts")
+			if phpVersion == "" && !withWordPress && !withLE && owaspEnabled == nil && recaptchaEnabled == nil && namespaceEnabled == nil && !withHSTS {
+				return apperr.New(apperr.CodeValidation, "no update action provided; pass PHP version and/or flags such as --wp, --le, --enable-owasp, --enable-recaptcha, --disable-owasp, --disable-recaptcha, --enable-ns, --disable-ns, --hsts")
 			}
 			err = svc.UpdateSitePHP(cmd.Context(), service.UpdateSiteOptions{
 				Domain:            args[0],
 				WithWordPress:     withWordPress,
+				WithLE:            withLE,
 				PHPVersion:        phpVersion,
 				OWASPEnabled:      owaspEnabled,
 				RecaptchaEnabled:  recaptchaEnabled,
@@ -227,6 +230,7 @@ func newSiteUpdateCmd(svc siteManager, rootOpts *rootOptions) *cobra.Command {
 
 	cmd.Flags().SortFlags = false
 	cmd.Flags().BoolVar(&withWordPress, "wp", false, "ensure WordPress and LiteSpeed Cache plugin are present")
+	cmd.Flags().BoolVar(&withLE, "le", false, "issue/update Let's Encrypt certificate for the site")
 	addPHPVersionFlags(cmd, php)
 	cmd.Flags().BoolVar(&owasp.enable, "enable-owasp", false, "enable OWASP ModSecurity at virtual host level")
 	cmd.Flags().BoolVar(&recaptcha.enable, "enable-recaptcha", false, "enable reCAPTCHA at virtual host level")

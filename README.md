@@ -93,7 +93,7 @@ ols site list
 
 ```bash
 ols --dry-run site create example.com --wp --le --php85 --enable-owasp --hsts --enable-ns
-ols --dry-run site update example.com --enable-recaptcha --disable-owasp --disable-ns
+ols --dry-run site update example.com --enable-recaptcha --disable-owasp --disable-ns --le
 ols --dry-run site info example.com
 ols --dry-run site show example.com
 ols --dry-run site list
@@ -125,7 +125,7 @@ ols site (command) [options]
 | Subcommand | Purpose | Options |
 | --- | --- | --- |
 | `create` | Create a new site/vhost | `--wp` `--le` `--php81` `--php82` `--php83` `--php84` `--php85` `--enable-owasp` `--disable-owasp` `--enable-recaptcha` `--disable-recaptcha` `--enable-ns` `--disable-ns` `--hsts` |
-| `update` | Update an existing site (PHP target optional when only security flags are used) | `--wp` (requires one of `--php81` `--php82` `--php83` `--php84` `--php85`), or security flags only: `--enable-owasp` `--disable-owasp` `--enable-recaptcha` `--disable-recaptcha` `--enable-ns` `--disable-ns` `--hsts` |
+| `update` | Update an existing site (PHP target optional when only security/LE flags are used) | `--wp` (requires one of `--php81` `--php82` `--php83` `--php84` `--php85`), optional `--le`, or security flags only: `--enable-owasp` `--disable-owasp` `--enable-recaptcha` `--disable-recaptcha` `--enable-ns` `--disable-ns` `--hsts` |
 | `info` | Show site metadata and detected status |  |
 | `show` | Print OLS virtual host config (`vhconf.conf`) |  |
 | `list` | List managed sites discovered from OLS vhost directory |  |

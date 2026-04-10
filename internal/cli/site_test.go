@@ -144,6 +144,7 @@ func TestSiteUpdateFlagOrder(t *testing.T) {
 
 	wantPrefix := []string{
 		"wp",
+		"le",
 		"php81",
 		"php82",
 		"php83",

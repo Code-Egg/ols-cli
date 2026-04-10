@@ -382,6 +382,95 @@ func TestUpdateSiteSecurityOnlyWithoutPHP(t *testing.T) {
 	}
 }
 
+func TestUpdateSiteLetsEncryptForSubdomainWithoutPHP(t *testing.T) {
+	var out bytes.Buffer
+	console := ui.NewStyledConsole(&out)
+	r := &fakeRunner{}
+
+	base := t.TempDir()
+	lswsRoot := filepath.Join(base, "lsws")
+	webRoot := filepath.Join(base, "www")
+	domain := "api.example.com"
+	vhostDir := filepath.Join(lswsRoot, "conf", "vhosts", domain)
+
+	if err := os.MkdirAll(filepath.Join(lswsRoot, "bin"), 0o755); err != nil {
+		t.Fatalf("mkdir bin: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(lswsRoot, "conf"), 0o755); err != nil {
+		t.Fatalf("mkdir conf: %v", err)
+	}
+	if err := os.MkdirAll(vhostDir, 0o755); err != nil {
+		t.Fatalf("mkdir vhost: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(lswsRoot, "bin", "lswsctrl"), []byte("stub"), 0o755); err != nil {
+		t.Fatalf("write lswsctrl: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(lswsRoot, "conf", "httpd_config.conf"), []byte("listener Default {\n}\n"), 0o644); err != nil {
+		t.Fatalf("write server config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(vhostDir, "vhconf.conf"), []byte(buildVHConfig("85")), 0o644); err != nil {
+		t.Fatalf("write vhconf: %v", err)
+	}
+
+	oldRoot := letsencryptLiveRoot
+	letsencryptLiveRoot = filepath.Join(base, "letsencrypt", "live")
+	t.Cleanup(func() { letsencryptLiveRoot = oldRoot })
+
+	certFile, keyFile := letsEncryptCertPaths(domain)
+	if err := os.MkdirAll(filepath.Dir(certFile), 0o755); err != nil {
+		t.Fatalf("mkdir cert dir: %v", err)
+	}
+	if err := os.WriteFile(certFile, []byte("cert"), 0o644); err != nil {
+		t.Fatalf("write cert file: %v", err)
+	}
+	if err := os.WriteFile(keyFile, []byte("key"), 0o600); err != nil {
+		t.Fatalf("write key file: %v", err)
+	}
+
+	svc := NewSiteServiceWithPaths(
+		fakeDetector{info: platform.Info{ID: "ubuntu", Family: platform.FamilyDebian, PackageManager: platform.PackageManagerAPT, VersionID: "24.04"}},
+		r,
+		console,
+		lswsRoot,
+		webRoot,
+	)
+
+	err := svc.UpdateSitePHP(context.Background(), UpdateSiteOptions{Domain: domain, WithLE: true})
+	if err != nil {
+		t.Fatalf("unexpected update error: %v", err)
+	}
+
+	updated, err := os.ReadFile(filepath.Join(vhostDir, "vhconf.conf"))
+	if err != nil {
+		t.Fatalf("read vhconf: %v", err)
+	}
+	content := string(updated)
+	if !strings.Contains(content, certFile) || !strings.Contains(content, keyFile) {
+		t.Fatalf("expected updated SSL cert/key paths in vhconf, got: %s", content)
+	}
+
+	hasCertbot := false
+	hasReload := false
+	for _, call := range r.calls {
+		if len(call) > 0 && call[0] == "certbot" {
+			hasCertbot = true
+			joined := strings.Join(call, " ")
+			if !strings.Contains(joined, "-d "+domain) {
+				t.Fatalf("expected certbot args to include -d %s, got: %#v", domain, call)
+			}
+		}
+		if len(call) == 2 && filepath.Base(call[0]) == "lswsctrl" && call[1] == "reload" {
+			hasReload = true
+		}
+	}
+	if !hasCertbot {
+		t.Fatalf("expected certbot call, got calls: %#v", r.calls)
+	}
+	if !hasReload {
+		t.Fatalf("expected lswsctrl reload call, got calls: %#v", r.calls)
+	}
+}
+
 func TestApplyVHostSecurityOptionsEnableAndDisable(t *testing.T) {
 	vhostPath := filepath.Join(t.TempDir(), "vhconf.conf")
 	if err := os.WriteFile(vhostPath, []byte(buildVHConfig("85")), 0o644); err != nil {

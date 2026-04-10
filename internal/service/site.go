@@ -135,6 +135,7 @@ type CreateSiteOptions struct {
 type UpdateSiteOptions struct {
 	Domain            string
 	WithWordPress     bool
+	WithLE            bool
 	PHPVersion        string
 	OWASPEnabled      *bool
 	RecaptchaEnabled  *bool
@@ -509,8 +510,10 @@ func (s SiteService) UpdateSitePHP(ctx context.Context, opts UpdateSiteOptions) 
 
 	phpRequested := strings.TrimSpace(opts.PHPVersion) != ""
 	securityRequested := opts.OWASPEnabled != nil || opts.RecaptchaEnabled != nil || opts.NamespaceEnabled != nil || opts.EnableHSTSHeaders
+	leRequested := opts.WithLE
+	isTopLevelDomain := isTopLevelSiteDomain(opts.Domain)
 
-	if !phpRequested && !opts.WithWordPress && !securityRequested {
+	if !phpRequested && !opts.WithWordPress && !securityRequested && !leRequested {
 		return apperr.New(apperr.CodeValidation, "no update action requested")
 	}
 	if opts.WithWordPress && !phpRequested {
@@ -528,22 +531,29 @@ func (s SiteService) UpdateSitePHP(ctx context.Context, opts UpdateSiteOptions) 
 		if err != nil {
 			return err
 		}
+		packages = packagesForPHPUpdate(phpVersion)
+	}
+	if phpRequested || leRequested {
 		info, err = s.detector.Detect(ctx)
 		if err != nil {
 			return err
 		}
-		packages = packagesForPHPUpdate(phpVersion)
 	}
 
 	s.console.Section("Update site configuration")
 	s.console.Bullet("Domain: " + opts.Domain)
 	if phpRequested {
 		s.console.Bullet("Target PHP: lsphp" + phpVersion)
+	}
+	if phpRequested || leRequested {
 		s.console.Bullet("Platform: " + info.Summary())
 	}
 	s.console.Bullet("VHost config: " + vhostConfig)
 	if opts.WithWordPress {
 		s.console.Bullet("WordPress + LiteSpeed Cache reconcile: enabled")
+	}
+	if opts.WithLE {
+		s.console.Bullet("Let's Encrypt: enabled")
 	}
 	if opts.OWASPEnabled != nil {
 		s.console.Bullet("OWASP virtual-host mode: " + enabledLabel(*opts.OWASPEnabled))
@@ -585,6 +595,20 @@ func (s SiteService) UpdateSitePHP(ctx context.Context, opts UpdateSiteOptions) 
 		}
 		if opts.EnableHSTSHeaders {
 			s.console.Bullet("append recommended security extra headers to context / in " + vhostConfig)
+		}
+		if opts.WithLE {
+			if isTopLevelDomain {
+				s.console.Bullet("perform domain reachability precheck for " + opts.Domain)
+				s.console.Bullet("perform optional www reachability precheck for www." + opts.Domain)
+				s.console.Bullet("if www precheck passes, issue Let's Encrypt cert for both domains")
+				s.console.Bullet("if www precheck fails, issue Let's Encrypt cert for primary domain only")
+			} else {
+				s.console.Bullet("skip domain reachability precheck for subdomain LE issuance")
+			}
+			s.console.Bullet("ensure certbot is installed")
+			s.console.Bullet("issue Let's Encrypt certificate via certbot webroot challenge")
+			s.console.Bullet("write cert/key into vhost SSL config")
+			s.console.Bullet("reload OpenLiteSpeed")
 		}
 		s.console.Success("Dry-run plan generated")
 		return nil
@@ -643,6 +667,42 @@ func (s SiteService) UpdateSitePHP(ctx context.Context, opts UpdateSiteOptions) 
 		return err
 	}
 
+	if opts.WithLE {
+		certDomains := []string{opts.Domain}
+		if isTopLevelDomain {
+			ok, detail := precheckLEDomainReachability(opts.Domain)
+			if !ok {
+				return apperr.New(apperr.CodeValidation, "Let's Encrypt precheck failed for "+opts.Domain+": "+detail)
+			}
+			s.console.Success("Let's Encrypt precheck passed for " + opts.Domain + ": " + detail)
+
+			wwwDomain := "www." + opts.Domain
+			okWWW, detailWWW := precheckLEDomainReachability(wwwDomain)
+			if okWWW {
+				certDomains = append(certDomains, wwwDomain)
+				s.console.Success("Let's Encrypt precheck passed for " + wwwDomain + ": " + detailWWW)
+			} else {
+				s.console.Warn("Let's Encrypt precheck failed for " + wwwDomain + "; issuing certificate for primary domain only: " + detailWWW)
+			}
+		}
+
+		certFile, keyFile, err := s.issueLetsEncryptCertificate(ctx, info, docRoot, certDomains...)
+		if err != nil {
+			return err
+		}
+		if err := applyVHostSSLCertificate(vhostConfig, certFile, keyFile); err != nil {
+			return err
+		}
+		s.console.Success("Let's Encrypt certificate issued")
+		s.console.Bullet("Certificate domains: " + strings.Join(certDomains, ", "))
+		s.console.Bullet("Certificate: " + certFile)
+		s.console.Bullet("Private key: " + keyFile)
+
+		if err := s.reloadOpenLiteSpeed(ctx); err != nil {
+			s.console.Warn("Failed to reload OpenLiteSpeed automatically after SSL issuance: " + err.Error())
+		}
+	}
+
 	if boolPtrValue(opts.RecaptchaEnabled) {
 		recaptchaEnabled, err := isServerRecaptchaEnabled(serverConfigPath)
 		if err != nil {
@@ -659,7 +719,9 @@ func (s SiteService) UpdateSitePHP(ctx context.Context, opts UpdateSiteOptions) 
 	if securityChanged {
 		s.console.Success("Requested security options applied to vhost config")
 	}
-	s.console.Bullet("Reload OpenLiteSpeed to apply configuration changes")
+	if !opts.WithLE {
+		s.console.Bullet("Reload OpenLiteSpeed to apply configuration changes")
+	}
 	return nil
 }
 
