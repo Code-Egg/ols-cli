@@ -111,14 +111,13 @@ ols (command) [options]
 | Command | Purpose | Options |
 | --- | --- | --- |
 | `install` | Install/align OpenLiteSpeed runtime and related packages | `--php81` `--php82` `--php83` `--php84` `--php85` `--database` `--config` `--http-port` `--https-port` `--ssl-cert` `--ssl-key` `--no-listeners` |
-| `update` | Update installed `ols` binary to latest GitHub release for current platform |  |
 | `site` | Manage sites (`create`, `update`, `info`, `show`, `list`, `delete`) | `--wp` `--le` `--php81` `--php82` `--php83` `--php84` `--php85` `--enable-owasp` `--disable-owasp` `--enable-recaptcha` `--disable-recaptcha` `--enable-ns` `--disable-ns` `--hsts` `--keep-db` |
+| `update` | Update installed `ols` binary to latest GitHub release for current platform |  |
 
 Global options (apply to all commands): `--dry-run`, `--color`
 
 
-site
-
+### site
 ```bash
 ols site (command) [options]
 ```
