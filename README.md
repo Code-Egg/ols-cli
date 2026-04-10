@@ -30,16 +30,16 @@ sudo ols install
 
 ## Usage
 
+### Create a wordprss site
+
+```bash
+sudo ols site create example.com --wp
+```
+
 ### Create a site with WordPress + Let's Encrypt
 
 ```bash
 sudo ols site create example.com --wp --le
-```
-
-### Create a wordprss site with default PHP version
-
-```bash
-sudo ols site create example.com --wp
 ```
 
 ### Update a site to a target PHP version
@@ -48,35 +48,46 @@ sudo ols site create example.com --wp
 sudo ols site update example.com --php85
 ```
 
-### Enable OWASP + reCAPTCHA and add security headers on a site
+### Security
+
+#### Enable OWASP + reCAPTCHA and add security headers on a site
 
 ```bash
 sudo ols site update example.com --enable-owasp --enable-recaptcha --hsts
 ```
 
-### Show site information
+#### Enable namespace
+
+```bash
+sudo ols site update example.com --enable-ns
+```
+
+
+### Control 
+
+#### Show site information
 
 ```bash
 ols site info example.com
 ```
 
-### Show OpenLiteSpeed virtual host config
+#### Show OpenLiteSpeed virtual host config
 
 ```bash
 ols site show example.com
 ```
 
-### List managed sites
+#### List managed sites
 
 ```bash
 ols site list
 ```
 
-### Preview operations without making changes
+### Preview mode
 
 ```bash
-ols --dry-run site create example.com --wp --le --php85 --enable-owasp --hsts
-ols --dry-run site update example.com --enable-recaptcha --disable-owasp
+ols --dry-run site create example.com --wp --le --php85 --enable-owasp --hsts --enable-ns
+ols --dry-run site update example.com --enable-recaptcha --disable-owasp --disable-ns
 ols --dry-run site info example.com
 ols --dry-run site show example.com
 ols --dry-run site list
@@ -84,29 +95,34 @@ ols --dry-run site list
 
 ## Command overview
 
+The ols commands:
+
+```bash
+ols (command) [options]
+```
+
 | Command | Purpose | Common options |
 | --- | --- | --- |
-| `ols install` | Install/align OpenLiteSpeed runtime and related packages | `--php81` `--php82` `--php83` `--php84` `--php85` `--database` `--config` `--http-port` `--https-port` `--ssl-cert` `--ssl-key` `--no-listeners` |
-| `ols site create <domain>` | Create a new site/vhost | `--wp` `--le` `--php81` `--php82` `--php83` `--php84` `--php85` `--enable-owasp` `--disable-owasp` `--enable-recaptcha` `--disable-recaptcha` `--hsts` |
-| `ols site update <domain>` | Update an existing site (PHP target optional when only security flags are used) | `--wp` `--php81` `--php82` `--php83` `--php84` `--php85` `--enable-owasp` `--disable-owasp` `--enable-recaptcha` `--disable-recaptcha` `--hsts` |
-| `ols site info <domain>` | Show site metadata and detected status | *(none)* |
-| `ols site show <domain>` | Print OLS virtual host config (`vhconf.conf`) | *(none)* |
-| `ols site list` | List managed sites discovered from OLS vhost directory | *(none)* |
-| `ols site delete <domain>` | Remove site config/files and optionally keep DB | `--keep-db` |
+| `install` | Install/align OpenLiteSpeed runtime and related packages | `--php81` `--php82` `--php83` `--php84` `--php85` `--database` `--config` `--http-port` `--https-port` `--ssl-cert` `--ssl-key` `--no-listeners` |
+| `site` | Manage sites (`create`, `update`, `info`, `show`, `list`, `delete`) | `--wp` `--le` `--php81` `--php82` `--php83` `--php84` `--php85` `--enable-owasp` `--disable-owasp` `--enable-recaptcha` `--disable-recaptcha` `--enable-ns` `--disable-ns` `--hsts` `--keep-db` |
 
 Global options (apply to all commands): `--dry-run`, `--color`
 
 
-`ols site` subcommands and options
+site
 
-| Subcommand | Syntax | Options |
+```bash
+ols site (command) [options]
+```
+
+| Subcommand | Purpose | Options |
 | --- | --- | --- |
-| `create` | `ols site create <domain>` | `--wp` `--le` `--php81` `--php82` `--php83` `--php84` `--php85` `--enable-owasp` `--disable-owasp` `--enable-recaptcha` `--disable-recaptcha` `--hsts` |
-| `update` | `ols site update <domain>` | `--wp` (requires one of `--php81` `--php82` `--php83` `--php84` `--php85`), or security flags only: `--enable-owasp` `--disable-owasp` `--enable-recaptcha` `--disable-recaptcha` `--hsts` |
-| `info` | `ols site info <domain>` | *(none)* |
-| `show` | `ols site show <domain>` | *(none)* |
-| `list` | `ols site list` | *(none)* |
-| `delete` | `ols site delete <domain>` | `--keep-db` |
+| `create` | Create a new site/vhost | `--wp` `--le` `--php81` `--php82` `--php83` `--php84` `--php85` `--enable-owasp` `--disable-owasp` `--enable-recaptcha` `--disable-recaptcha` `--enable-ns` `--disable-ns` `--hsts` |
+| `update` | Update an existing site (PHP target optional when only security flags are used) | `--wp` (requires one of `--php81` `--php82` `--php83` `--php84` `--php85`), or security flags only: `--enable-owasp` `--disable-owasp` `--enable-recaptcha` `--disable-recaptcha` `--enable-ns` `--disable-ns` `--hsts` |
+| `info` | Show site metadata and detected status |  |
+| `show` | Print OLS virtual host config (`vhconf.conf`) |  |
+| `list` | List managed sites discovered from OLS vhost directory |  |
+| `delete` | Remove site config/files and optionally keep DB | `--keep-db` |
 
 
 ## Development
@@ -148,6 +164,7 @@ sudo ols install
 By default, `ols install` prepares server-level security blocks as:
 - `module mod_security` with `ls_enabled 0`
 - `lsrecaptcha` with `enabled 1` and `type 0`
+- `namespace` with `1`
 
 Override config values with flags when needed:
 
