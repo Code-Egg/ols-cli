@@ -201,8 +201,8 @@ func TestCreateSiteCreatesVHostAndDocRoot(t *testing.T) {
 	if !strings.Contains(cfgS, "virtualhost example.com {") {
 		t.Fatalf("expected virtualhost block in server config: %s", cfgS)
 	}
-	if !strings.Contains(cfgS, "map                     example.com example.com") {
-		t.Fatalf("expected listener map in server config: %s", cfgS)
+	if !strings.Contains(cfgS, "map                     example.com www.example.com, example.com") {
+		t.Fatalf("expected listener map with www alias in server config: %s", cfgS)
 	}
 
 	reloadCalled := false
@@ -686,7 +686,7 @@ func TestIssueLetsEncryptCertificateSuccess(t *testing.T) {
 		t.Fatalf("write key file: %v", err)
 	}
 
-	gotCert, gotKey, err := svc.issueLetsEncryptCertificate(context.Background(), platform.Info{PackageManager: platform.PackageManagerAPT}, "example.com", "/var/www/example.com/html")
+	gotCert, gotKey, err := svc.issueLetsEncryptCertificate(context.Background(), platform.Info{PackageManager: platform.PackageManagerAPT}, "/var/www/example.com/html", "example.com")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -698,11 +698,93 @@ func TestIssueLetsEncryptCertificateSuccess(t *testing.T) {
 	for _, call := range r.calls {
 		if len(call) > 0 && call[0] == "certbot" {
 			hasCertbot = true
+			if !strings.Contains(strings.Join(call, " "), "-d example.com") {
+				t.Fatalf("expected certbot args to include -d example.com, got: %#v", call)
+			}
 			break
 		}
 	}
 	if !hasCertbot {
 		t.Fatalf("expected certbot to be called, got calls: %#v", r.calls)
+	}
+}
+
+func TestIssueLetsEncryptCertificateMultipleDomains(t *testing.T) {
+	var out bytes.Buffer
+	console := ui.NewStyledConsole(&out)
+	r := &fakeRunner{}
+	svc := NewSiteService(
+		fakeDetector{info: platform.Info{ID: "ubuntu", Family: platform.FamilyDebian, PackageManager: platform.PackageManagerAPT, VersionID: "24.04"}},
+		r,
+		console,
+	)
+
+	oldRoot := letsencryptLiveRoot
+	letsencryptLiveRoot = filepath.Join(t.TempDir(), "letsencrypt", "live")
+	t.Cleanup(func() { letsencryptLiveRoot = oldRoot })
+
+	certFile, keyFile := letsEncryptCertPaths("litespeedtech.club")
+	if err := os.MkdirAll(filepath.Dir(certFile), 0o755); err != nil {
+		t.Fatalf("mkdir cert dir: %v", err)
+	}
+	if err := os.WriteFile(certFile, []byte("cert"), 0o644); err != nil {
+		t.Fatalf("write cert file: %v", err)
+	}
+	if err := os.WriteFile(keyFile, []byte("key"), 0o600); err != nil {
+		t.Fatalf("write key file: %v", err)
+	}
+
+	gotCert, gotKey, err := svc.issueLetsEncryptCertificate(
+		context.Background(),
+		platform.Info{PackageManager: platform.PackageManagerAPT},
+		"/var/www/litespeedtech.club/html",
+		"litespeedtech.club",
+		"www.litespeedtech.club",
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotCert != certFile || gotKey != keyFile {
+		t.Fatalf("unexpected cert paths: cert=%s key=%s", gotCert, gotKey)
+	}
+
+	found := false
+	for _, call := range r.calls {
+		if len(call) == 0 || call[0] != "certbot" {
+			continue
+		}
+		joined := strings.Join(call, " ")
+		if strings.Contains(joined, "-d litespeedtech.club") && strings.Contains(joined, "-d www.litespeedtech.club") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected certbot args to include both domains, got calls: %#v", r.calls)
+	}
+}
+
+func TestIsTopLevelSiteDomain(t *testing.T) {
+	if !isTopLevelSiteDomain("litespeedtech.club") {
+		t.Fatal("expected litespeedtech.club to be treated as top-level domain")
+	}
+	if !isTopLevelSiteDomain("example.com.tw") {
+		t.Fatal("expected example.com.tw to be treated as top-level domain")
+	}
+	if isTopLevelSiteDomain("api.litespeedtech.club") {
+		t.Fatal("expected api.litespeedtech.club to be treated as subdomain")
+	}
+}
+
+func TestMappedListenerDomains(t *testing.T) {
+	gotTop := mappedListenerDomains("litespeedtech.club")
+	if len(gotTop) != 2 || gotTop[0] != "www.litespeedtech.club" || gotTop[1] != "litespeedtech.club" {
+		t.Fatalf("unexpected mapped domains for top-level domain: %#v", gotTop)
+	}
+
+	gotSub := mappedListenerDomains("api.litespeedtech.club")
+	if len(gotSub) != 1 || gotSub[0] != "api.litespeedtech.club" {
+		t.Fatalf("unexpected mapped domains for subdomain: %#v", gotSub)
 	}
 }
 

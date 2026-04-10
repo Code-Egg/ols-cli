@@ -273,6 +273,8 @@ func (s SiteService) CreateSite(ctx context.Context, opts CreateSiteOptions) err
 	vhostDefinition := filepath.Join(vhostDir, "vhost.conf")
 	serverConfigPath := filepath.Join(s.lswsRoot, "conf", "httpd_config.conf")
 	siteURL := wordPressBaseURL(opts.Domain, opts.WithLE)
+	mapDomains := mappedListenerDomains(opts.Domain)
+	isTopLevelDomain := isTopLevelSiteDomain(opts.Domain)
 	var wpAccess *wpAdminAccess
 
 	s.console.Section("Create site")
@@ -311,7 +313,7 @@ func (s SiteService) CreateSite(ctx context.Context, opts CreateSiteOptions) err
 		s.console.Bullet("write " + vhostConfig)
 		s.console.Bullet("write " + vhostDefinition)
 		s.console.Bullet("append virtualhost block into " + serverConfigPath)
-		s.console.Bullet("insert listener map in " + serverConfigPath)
+		s.console.Bullet("insert listener map in " + serverConfigPath + " for hosts: " + strings.Join(mapDomains, ", "))
 		s.console.Bullet("align ownership to OpenLiteSpeed server user/group for " + siteRoot + " and " + vhostDir)
 		if opts.OWASPEnabled != nil {
 			s.console.Bullet("set virtual-host OWASP mod_security: " + enabledLabel(*opts.OWASPEnabled))
@@ -336,7 +338,14 @@ func (s SiteService) CreateSite(ctx context.Context, opts CreateSiteOptions) err
 			s.console.Bullet("write starter index.php into " + docRoot)
 		}
 		if opts.WithLE {
-			s.console.Bullet("perform domain reachability precheck for Let's Encrypt")
+			if isTopLevelDomain {
+				s.console.Bullet("perform domain reachability precheck for " + opts.Domain)
+				s.console.Bullet("perform optional www reachability precheck for www." + opts.Domain)
+				s.console.Bullet("if www precheck passes, issue Let's Encrypt cert for both domains")
+				s.console.Bullet("if www precheck fails, issue Let's Encrypt cert for primary domain only")
+			} else {
+				s.console.Bullet("skip domain reachability precheck for subdomain LE issuance")
+			}
 			s.console.Bullet("ensure certbot is installed")
 			s.console.Bullet("issue Let's Encrypt certificate via certbot webroot challenge")
 			s.console.Bullet("write cert/key into vhost SSL config")
@@ -430,13 +439,25 @@ func (s SiteService) CreateSite(ctx context.Context, opts CreateSiteOptions) err
 	}
 
 	if opts.WithLE {
-		ok, detail := precheckLEDomainReachability(opts.Domain)
-		if !ok {
-			return apperr.New(apperr.CodeValidation, "Let's Encrypt precheck failed: "+detail)
-		}
-		s.console.Success("Let's Encrypt precheck passed: domain is reachable over HTTP")
+		certDomains := []string{opts.Domain}
+		if isTopLevelDomain {
+			ok, detail := precheckLEDomainReachability(opts.Domain)
+			if !ok {
+				return apperr.New(apperr.CodeValidation, "Let's Encrypt precheck failed for "+opts.Domain+": "+detail)
+			}
+			s.console.Success("Let's Encrypt precheck passed for " + opts.Domain + ": " + detail)
 
-		certFile, keyFile, err := s.issueLetsEncryptCertificate(ctx, info, opts.Domain, docRoot)
+			wwwDomain := "www." + opts.Domain
+			okWWW, detailWWW := precheckLEDomainReachability(wwwDomain)
+			if okWWW {
+				certDomains = append(certDomains, wwwDomain)
+				s.console.Success("Let's Encrypt precheck passed for " + wwwDomain + ": " + detailWWW)
+			} else {
+				s.console.Warn("Let's Encrypt precheck failed for " + wwwDomain + "; issuing certificate for primary domain only: " + detailWWW)
+			}
+		}
+
+		certFile, keyFile, err := s.issueLetsEncryptCertificate(ctx, info, docRoot, certDomains...)
 		if err != nil {
 			return err
 		}
@@ -444,6 +465,7 @@ func (s SiteService) CreateSite(ctx context.Context, opts CreateSiteOptions) err
 			return err
 		}
 		s.console.Success("Let's Encrypt certificate issued")
+		s.console.Bullet("Certificate domains: " + strings.Join(certDomains, ", "))
 		s.console.Bullet("Certificate: " + certFile)
 		s.console.Bullet("Private key: " + keyFile)
 
@@ -1082,6 +1104,13 @@ func (s SiteService) ensureDomainDoesNotExist(domain, vhostDir, serverConfigPath
 		return apperr.New(apperr.CodeValidation, fmt.Sprintf("domain %s is already mapped in %s", domain, serverConfigPath))
 	}
 
+	if isTopLevelSiteDomain(domain) {
+		wwwDomain := "www." + domain
+		if hasDomainMapLine(cfg, wwwDomain) {
+			return apperr.New(apperr.CodeValidation, fmt.Sprintf("domain %s requires alias %s but alias is already mapped in %s", domain, wwwDomain, serverConfigPath))
+		}
+	}
+
 	return nil
 }
 
@@ -1096,17 +1125,18 @@ func (s SiteService) registerDomainInServerConfig(domain, siteRoot, vhostConfigP
 		return apperr.New(apperr.CodeValidation, fmt.Sprintf("domain %s already exists in %s", domain, serverConfigPath))
 	}
 
+	mapDomains := mappedListenerDomains(domain)
 	updated := strings.TrimRight(cfg, "\n") + "\n\n" + buildVHostDefinition(domain, siteRoot, vhostConfigPath) + "\n"
 	lines := strings.Split(updated, "\n")
 	httpListenerName := chooseExistingListenerName(lines, []string{"HTTP", "Default"}, "HTTP")
 	httpsListenerName := chooseExistingListenerName(lines, []string{"HTTPS", "SSL"}, "HTTPS")
 
-	updated, mappedHTTP := ensureDomainMappedInNamedListener(updated, httpListenerName, domain)
-	updated, mappedHTTPS := ensureDomainMappedInNamedListener(updated, httpsListenerName, domain)
+	updated, mappedHTTP := ensureDomainMappedInNamedListener(updated, httpListenerName, domain, mapDomains)
+	updated, mappedHTTPS := ensureDomainMappedInNamedListener(updated, httpsListenerName, domain, mapDomains)
 
 	mappedFallback := false
 	if !mappedHTTP && !mappedHTTPS {
-		updated, mappedFallback, err = ensureDomainMappedInFirstListener(updated, domain)
+		updated, mappedFallback, err = ensureDomainMappedInFirstListener(updated, domain, mapDomains)
 		if err != nil {
 			return err
 		}
@@ -1118,13 +1148,13 @@ func (s SiteService) registerDomainInServerConfig(domain, siteRoot, vhostConfigP
 
 	s.console.Bullet("Registered virtual host in " + serverConfigPath)
 	if mappedHTTP {
-		s.console.Bullet("Mapped domain in HTTP listener (" + httpListenerName + "): " + domain)
+		s.console.Bullet("Mapped domain in HTTP listener (" + httpListenerName + "): " + strings.Join(mapDomains, ", "))
 	}
 	if mappedHTTPS {
-		s.console.Bullet("Mapped domain in HTTPS listener (" + httpsListenerName + "): " + domain)
+		s.console.Bullet("Mapped domain in HTTPS listener (" + httpsListenerName + "): " + strings.Join(mapDomains, ", "))
 	}
 	if mappedFallback {
-		s.console.Bullet("Mapped domain in first listener: " + domain)
+		s.console.Bullet("Mapped domain in first listener: " + strings.Join(mapDomains, ", "))
 	}
 	return nil
 }
@@ -1140,7 +1170,11 @@ func (s SiteService) removeDomainFromServerConfig(domain, serverConfigPath strin
 	if err != nil {
 		return err
 	}
-	updated, removedMaps := removeDomainMappings(updated, domain)
+	removeDomains := []string{domain}
+	if isTopLevelSiteDomain(domain) {
+		removeDomains = append(removeDomains, "www."+domain)
+	}
+	updated, removedMaps := removeDomainMappings(updated, removeDomains...)
 	if !removedVHost && !removedMaps {
 		s.console.Warn("No matching virtualhost/map entries found for " + domain)
 		return nil
@@ -1154,7 +1188,7 @@ func (s SiteService) removeDomainFromServerConfig(domain, serverConfigPath strin
 	return nil
 }
 
-func ensureDomainMappedInNamedListener(cfg, listenerName, domain string) (string, bool) {
+func ensureDomainMappedInNamedListener(cfg, listenerName, domain string, mapDomains []string) (string, bool) {
 	lines := strings.Split(cfg, "\n")
 	start, end := findListenerBlockByName(lines, listenerName)
 	if start < 0 || end < 0 {
@@ -1162,18 +1196,20 @@ func ensureDomainMappedInNamedListener(cfg, listenerName, domain string) (string
 	}
 
 	for i := start; i <= end; i++ {
-		if mapLineContainsDomain(strings.TrimSpace(lines[i]), domain) {
-			return cfg, false
+		for _, mapDomain := range mapDomains {
+			if mapLineContainsDomain(strings.TrimSpace(lines[i]), mapDomain) {
+				return cfg, false
+			}
 		}
 	}
 
 	indent := detectMapIndent(lines[start : end+1])
-	mapLine := fmt.Sprintf("%smap                     %s %s", indent, domain, domain)
+	mapLine := fmt.Sprintf("%smap                     %s %s", indent, domain, strings.Join(mapDomains, ", "))
 	lines = append(lines[:end], append([]string{mapLine}, lines[end:]...)...)
 	return strings.Join(lines, "\n"), true
 }
 
-func ensureDomainMappedInFirstListener(cfg, domain string) (string, bool, error) {
+func ensureDomainMappedInFirstListener(cfg, domain string, mapDomains []string) (string, bool, error) {
 	lines := strings.Split(cfg, "\n")
 	start, end := findFirstListenerBlock(lines)
 	if start < 0 || end < 0 {
@@ -1181,13 +1217,15 @@ func ensureDomainMappedInFirstListener(cfg, domain string) (string, bool, error)
 	}
 
 	for i := start; i <= end; i++ {
-		if mapLineContainsDomain(strings.TrimSpace(lines[i]), domain) {
-			return cfg, false, nil
+		for _, mapDomain := range mapDomains {
+			if mapLineContainsDomain(strings.TrimSpace(lines[i]), mapDomain) {
+				return cfg, false, nil
+			}
 		}
 	}
 
 	indent := detectMapIndent(lines[start : end+1])
-	mapLine := fmt.Sprintf("%smap                     %s %s", indent, domain, domain)
+	mapLine := fmt.Sprintf("%smap                     %s %s", indent, domain, strings.Join(mapDomains, ", "))
 	lines = append(lines[:end], append([]string{mapLine}, lines[end:]...)...)
 	return strings.Join(lines, "\n"), true, nil
 }
@@ -1300,7 +1338,19 @@ func findVirtualHostBlockByName(lines []string, domain string) (int, int) {
 	return -1, -1
 }
 
-func removeDomainMappings(cfg, domain string) (string, bool) {
+func removeDomainMappings(cfg string, domains ...string) (string, bool) {
+	removeSet := map[string]struct{}{}
+	for _, domain := range domains {
+		normalized := strings.TrimSpace(strings.ToLower(domain))
+		if normalized == "" {
+			continue
+		}
+		removeSet[normalized] = struct{}{}
+	}
+	if len(removeSet) == 0 {
+		return cfg, false
+	}
+
 	lines := strings.Split(cfg, "\n")
 	changed := false
 	for i, line := range lines {
@@ -1321,7 +1371,7 @@ func removeDomainMappings(cfg, domain string) (string, bool) {
 				if host == "" {
 					continue
 				}
-				if strings.EqualFold(host, domain) {
+				if _, ok := removeSet[strings.ToLower(host)]; ok {
 					removed = true
 					continue
 				}
@@ -1340,7 +1390,7 @@ func removeDomainMappings(cfg, domain string) (string, bool) {
 		if idx := strings.Index(line, "map"); idx > 0 {
 			indent = line[:idx]
 		}
-		lines[i] = fmt.Sprintf("%smap                     %s %s", indent, mapName, strings.Join(keptHosts, ","))
+		lines[i] = fmt.Sprintf("%smap                     %s %s", indent, mapName, strings.Join(keptHosts, ", "))
 	}
 	if !changed {
 		return cfg, false
@@ -2097,14 +2147,17 @@ func (s SiteService) ensureCertbotAvailable(ctx context.Context, info platform.I
 	return nil
 }
 
-func (s SiteService) issueLetsEncryptCertificate(ctx context.Context, info platform.Info, domain, webRoot string) (string, string, error) {
+func (s SiteService) issueLetsEncryptCertificate(ctx context.Context, info platform.Info, webRoot string, domains ...string) (string, string, error) {
 	if err := s.ensureCertbotAvailable(ctx, info); err != nil {
 		return "", "", err
 	}
 
-	res, err := s.runner.Run(
-		ctx,
-		"certbot",
+	certDomains := uniqueNormalizedDomains(domains)
+	if len(certDomains) == 0 {
+		return "", "", apperr.New(apperr.CodeValidation, "at least one domain is required for Let's Encrypt issuance")
+	}
+
+	certbotArgs := []string{
 		"certonly",
 		"--non-interactive",
 		"--agree-tos",
@@ -2112,8 +2165,12 @@ func (s SiteService) issueLetsEncryptCertificate(ctx context.Context, info platf
 		"--keep-until-expiring",
 		"--webroot",
 		"-w", webRoot,
-		"-d", domain,
-	)
+	}
+	for _, domain := range certDomains {
+		certbotArgs = append(certbotArgs, "-d", domain)
+	}
+
+	res, err := s.runner.Run(ctx, "certbot", certbotArgs...)
 	if err != nil {
 		detail := strings.TrimSpace(strings.Join([]string{res.Stdout, res.Stderr}, "\n"))
 		if detail != "" {
@@ -2122,7 +2179,8 @@ func (s SiteService) issueLetsEncryptCertificate(ctx context.Context, info platf
 		return "", "", apperr.Wrap(apperr.CodeCommand, "certbot certificate issuance failed", err)
 	}
 
-	certFile, keyFile := letsEncryptCertPaths(domain)
+	primaryDomain := certDomains[0]
+	certFile, keyFile := letsEncryptCertPaths(primaryDomain)
 	if !fileExists(certFile) || !fileExists(keyFile) {
 		return "", "", apperr.New(
 			apperr.CodeCommand,
@@ -2641,6 +2699,59 @@ func wordPressBaseURL(domain string, secure bool) string {
 		scheme = "https"
 	}
 	return scheme + "://" + strings.TrimSpace(strings.ToLower(domain))
+}
+
+func isTopLevelSiteDomain(domain string) bool {
+	d := strings.TrimSpace(strings.ToLower(domain))
+	if d == "" {
+		return false
+	}
+	labels := strings.Split(d, ".")
+	if len(labels) < 2 {
+		return false
+	}
+	if len(labels) == 2 {
+		return true
+	}
+	if len(labels) == 3 {
+		sld := labels[len(labels)-2]
+		tld := labels[len(labels)-1]
+		if len(tld) == 2 {
+			switch sld {
+			case "ac", "co", "com", "edu", "gov", "mil", "net", "org":
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func mappedListenerDomains(domain string) []string {
+	d := strings.TrimSpace(strings.ToLower(domain))
+	if d == "" {
+		return nil
+	}
+	if isTopLevelSiteDomain(d) {
+		return []string{"www." + d, d}
+	}
+	return []string{d}
+}
+
+func uniqueNormalizedDomains(domains []string) []string {
+	out := make([]string, 0, len(domains))
+	seen := map[string]struct{}{}
+	for _, domain := range domains {
+		normalized := strings.TrimSpace(strings.ToLower(domain))
+		if normalized == "" {
+			continue
+		}
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		out = append(out, normalized)
+	}
+	return out
 }
 
 func (s SiteService) createWordPressDatabase(ctx context.Context, dbName, dbUser, dbPassword string) error {
