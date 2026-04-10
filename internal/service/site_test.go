@@ -169,12 +169,28 @@ func TestCreateSiteCreatesVHostAndDocRoot(t *testing.T) {
 		t.Fatalf("expected starter index.php: %v", err)
 	}
 
+	logsRoot := filepath.Join(webRoot, "example.com", "logs")
+	if _, err := os.Stat(logsRoot); err != nil {
+		t.Fatalf("expected logs directory: %v", err)
+	}
+
 	vhostDir := filepath.Join(lswsRoot, "conf", "vhosts", "example.com")
 	if _, err := os.Stat(filepath.Join(vhostDir, "vhconf.conf")); err != nil {
 		t.Fatalf("expected vhconf.conf: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(vhostDir, "vhost.conf")); err != nil {
 		t.Fatalf("expected vhost.conf: %v", err)
+	}
+	vhConf, err := os.ReadFile(filepath.Join(vhostDir, "vhconf.conf"))
+	if err != nil {
+		t.Fatalf("read vhconf: %v", err)
+	}
+	vhContent := string(vhConf)
+	if !strings.Contains(vhContent, "errorlog $VH_ROOT/logs/error.log") {
+		t.Fatalf("expected vhost error log under $VH_ROOT/logs, got: %s", vhContent)
+	}
+	if !strings.Contains(vhContent, "accesslog $VH_ROOT/logs/access.log") {
+		t.Fatalf("expected vhost access log under $VH_ROOT/logs, got: %s", vhContent)
 	}
 
 	cfg, err := os.ReadFile(filepath.Join(lswsRoot, "conf", "httpd_config.conf"))

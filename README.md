@@ -48,6 +48,12 @@ sudo ols site create example.com --wp --le
 sudo ols site update example.com --php85
 ```
 
+### Update CLI binary to latest release
+
+```bash
+sudo ols update
+```
+
 ### Security
 
 #### Enable OWASP + reCAPTCHA and add security headers on a site
@@ -91,6 +97,7 @@ ols --dry-run site update example.com --enable-recaptcha --disable-owasp --disab
 ols --dry-run site info example.com
 ols --dry-run site show example.com
 ols --dry-run site list
+ols --dry-run update
 ```
 
 ## Command overview
@@ -104,6 +111,7 @@ ols (command) [options]
 | Command | Purpose | Options |
 | --- | --- | --- |
 | `install` | Install/align OpenLiteSpeed runtime and related packages | `--php81` `--php82` `--php83` `--php84` `--php85` `--database` `--config` `--http-port` `--https-port` `--ssl-cert` `--ssl-key` `--no-listeners` |
+| `update` | Update installed `ols` binary to latest GitHub release for current platform |  |
 | `site` | Manage sites (`create`, `update`, `info`, `show`, `list`, `delete`) | `--wp` `--le` `--php81` `--php82` `--php83` `--php84` `--php85` `--enable-owasp` `--disable-owasp` `--enable-recaptcha` `--disable-recaptcha` `--enable-ns` `--disable-ns` `--hsts` `--keep-db` |
 
 Global options (apply to all commands): `--dry-run`, `--color`

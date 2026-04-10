@@ -267,6 +267,7 @@ func (s SiteService) CreateSite(ctx context.Context, opts CreateSiteOptions) err
 
 	siteRoot := filepath.Join(s.webRoot, opts.Domain)
 	docRoot := filepath.Join(siteRoot, "html")
+	logsRoot := filepath.Join(siteRoot, "logs")
 	vhostDir := filepath.Join(s.lswsRoot, "conf", "vhosts", opts.Domain)
 	vhostConfig := filepath.Join(vhostDir, "vhconf.conf")
 	vhostDefinition := filepath.Join(vhostDir, "vhost.conf")
@@ -305,6 +306,7 @@ func (s SiteService) CreateSite(ctx context.Context, opts CreateSiteOptions) err
 		s.console.Info("Planned filesystem operations:")
 		s.console.Bullet("check duplicate domain in " + serverConfigPath)
 		s.console.Bullet("mkdir -p " + docRoot)
+		s.console.Bullet("mkdir -p " + logsRoot)
 		s.console.Bullet("mkdir -p " + vhostDir)
 		s.console.Bullet("write " + vhostConfig)
 		s.console.Bullet("write " + vhostDefinition)
@@ -354,6 +356,9 @@ func (s SiteService) CreateSite(ctx context.Context, opts CreateSiteOptions) err
 
 	if err := os.MkdirAll(docRoot, 0o755); err != nil {
 		return apperr.Wrap(apperr.CodeConfig, "failed to create document root", err)
+	}
+	if err := os.MkdirAll(logsRoot, 0o755); err != nil {
+		return apperr.Wrap(apperr.CodeConfig, "failed to create logs root", err)
 	}
 	if err := os.MkdirAll(vhostDir, 0o755); err != nil {
 		return apperr.Wrap(apperr.CodeConfig, "failed to create virtual host directory", err)
@@ -2839,7 +2844,7 @@ func buildVHostDefinition(domain, siteRoot, vhostConfigPath string) string {
 }
 
 func buildVHConfig(phpVersion string) string {
-	return fmt.Sprintf("docRoot                   $VH_ROOT/html/\n\nindex  {\n  useServer               0\n  indexFiles              index.php, index.html\n}\n\ncontext / {\n  type                    null\n  location                $DOC_ROOT/\n  allowBrowse             1\n}\n\nextprocessor lsphp%s {\n  type                    lsapi\n  address                 uds://tmp/lshttpd/lsphp%s.sock\n  maxConns                35\n  env                     PHP_LSAPI_CHILDREN=35\n  env                     LSAPI_AVOID_FORK=200M\n  initTimeout             60\n  retryTimeout            0\n  persistConn             1\n  pcKeepAliveTimeout      1\n  respBuffer              0\n  autoStart               2\n  path                    /usr/local/lsws/lsphp%s/bin/lsphp\n  backlog                 100\n  instances               1\n  priority                0\n  memSoftLimit            0\n  memHardLimit            0\n  procSoftLimit           0\n  procHardLimit           0\n}\n\nscriptHandler  {\n  add                     lsapi:lsphp%s php\n}\n\nrewrite  {\n  enable                  1\n  autoLoadHtaccess        1\n}\n", phpVersion, phpVersion, phpVersion, phpVersion)
+	return fmt.Sprintf("docRoot                   $VH_ROOT/html/\n\nerrorlog $VH_ROOT/logs/error.log {\n  useServer               0\n  logLevel                WARN\n  rollingSize             10M\n}\n\naccesslog $VH_ROOT/logs/access.log {\n  useServer               0\n  logFormat               \"%h %l %u %t \\\"%r\\\" %>s %b\"\n  logHeaders              5\n  rollingSize             10M\n  keepDays                10\n  compressArchive         1\n}\n\nindex  {\n  useServer               0\n  indexFiles              index.php, index.html\n}\n\ncontext / {\n  type                    null\n  location                $DOC_ROOT/\n  allowBrowse             1\n}\n\nextprocessor lsphp%s {\n  type                    lsapi\n  address                 uds://tmp/lshttpd/lsphp%s.sock\n  maxConns                35\n  env                     PHP_LSAPI_CHILDREN=35\n  env                     LSAPI_AVOID_FORK=200M\n  initTimeout             60\n  retryTimeout            0\n  persistConn             1\n  pcKeepAliveTimeout      1\n  respBuffer              0\n  autoStart               2\n  path                    /usr/local/lsws/lsphp%s/bin/lsphp\n  backlog                 100\n  instances               1\n  priority                0\n  memSoftLimit            0\n  memHardLimit            0\n  procSoftLimit           0\n  procHardLimit           0\n}\n\nscriptHandler  {\n  add                     lsapi:lsphp%s php\n}\n\nrewrite  {\n  enable                  1\n  autoLoadHtaccess        1\n}\n", phpVersion, phpVersion, phpVersion, phpVersion)
 }
 
 func NormalizePHPVersion(in string) (string, error) {
