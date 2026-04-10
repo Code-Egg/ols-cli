@@ -474,6 +474,9 @@ func TestEnsureServerSecurityDefaults(t *testing.T) {
 	if !strings.Contains(content, "lsrecaptcha") || !strings.Contains(content, "enabled                  1") || !strings.Contains(content, "type                     0") {
 		t.Fatalf("expected server recaptcha defaults, got: %s", content)
 	}
+	if !strings.Contains(content, "namespace                1") {
+		t.Fatalf("expected server namespace default namespace=1, got: %s", content)
+	}
 }
 
 func TestDeriveWordPressDBIdentifiers(t *testing.T) {

@@ -1758,6 +1758,8 @@ func (s SiteService) ensureServerSecurityDefaults(serverConfigPath string) error
 	changed = changed || modsecChanged
 	lines, recaptchaChanged := upsertServerDefaultBlock(lines, "lsrecaptcha", buildServerRecaptchaDefaultBlock())
 	changed = changed || recaptchaChanged
+	lines, namespaceChanged := upsertDirective(lines, "namespace", "1")
+	changed = changed || namespaceChanged
 
 	if !changed {
 		return nil
@@ -1765,7 +1767,7 @@ func (s SiteService) ensureServerSecurityDefaults(serverConfigPath string) error
 	if err := os.WriteFile(serverConfigPath, []byte(strings.Join(lines, "\n")), 0o644); err != nil {
 		return apperr.Wrap(apperr.CodeConfig, "failed to update OpenLiteSpeed server security defaults", err)
 	}
-	s.console.Bullet("Configured server-level ModSecurity (ls_enabled=0) and reCAPTCHA defaults in " + serverConfigPath)
+	s.console.Bullet("Configured server-level ModSecurity (ls_enabled=0), reCAPTCHA defaults, and namespace=1 in " + serverConfigPath)
 	return nil
 }
 
