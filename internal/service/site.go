@@ -150,6 +150,11 @@ type DeleteSiteOptions struct {
 	DryRun       bool
 }
 
+type ToggleSiteOptions struct {
+	Domain string
+	DryRun bool
+}
+
 type SiteInfoOptions struct {
 	Domain string
 	DryRun bool
@@ -787,6 +792,186 @@ func (s SiteService) DeleteSite(ctx context.Context, opts DeleteSiteOptions) err
 	s.console.Bullet("Removed site root: " + siteRoot)
 	s.console.Bullet("Server config updated: " + serverConfigPath)
 	return nil
+}
+
+func (s SiteService) DisableSite(ctx context.Context, opts ToggleSiteOptions) error {
+	if err := ValidateDomain(opts.Domain); err != nil {
+		return err
+	}
+
+	domain := strings.ToLower(strings.TrimSpace(opts.Domain))
+	vhostConfig := filepath.Join(s.lswsRoot, "conf", "vhosts", domain, "vhconf.conf")
+	serverConfigPath := filepath.Join(s.lswsRoot, "conf", "httpd_config.conf")
+
+	s.console.Section("Disable site")
+	s.console.Bullet("Domain: " + domain)
+	s.console.Bullet("Server config: " + serverConfigPath)
+
+	if opts.DryRun {
+		s.console.Warn("Dry-run enabled: no system changes were made")
+		s.console.Bullet("append " + domain + " to suspendedVhosts in " + serverConfigPath)
+		s.console.Bullet("reload OpenLiteSpeed")
+		s.console.Success("Dry-run plan generated")
+		return nil
+	}
+
+	if !fileExists(vhostConfig) {
+		return apperr.New(apperr.CodeValidation, fmt.Sprintf("virtual host does not exist for %s; expected %s", domain, vhostConfig))
+	}
+	if err := s.setSiteSuspended(domain, true, serverConfigPath); err != nil {
+		return err
+	}
+	if err := s.reloadOpenLiteSpeed(ctx); err != nil {
+		s.console.Warn("Failed to reload OpenLiteSpeed automatically: " + err.Error())
+	}
+
+	s.console.Success("Site disabled")
+	return nil
+}
+
+func (s SiteService) EnableSite(ctx context.Context, opts ToggleSiteOptions) error {
+	if err := ValidateDomain(opts.Domain); err != nil {
+		return err
+	}
+
+	domain := strings.ToLower(strings.TrimSpace(opts.Domain))
+	vhostConfig := filepath.Join(s.lswsRoot, "conf", "vhosts", domain, "vhconf.conf")
+	serverConfigPath := filepath.Join(s.lswsRoot, "conf", "httpd_config.conf")
+
+	s.console.Section("Enable site")
+	s.console.Bullet("Domain: " + domain)
+	s.console.Bullet("Server config: " + serverConfigPath)
+
+	if opts.DryRun {
+		s.console.Warn("Dry-run enabled: no system changes were made")
+		s.console.Bullet("remove " + domain + " from suspendedVhosts in " + serverConfigPath)
+		s.console.Bullet("reload OpenLiteSpeed")
+		s.console.Success("Dry-run plan generated")
+		return nil
+	}
+
+	if !fileExists(vhostConfig) {
+		return apperr.New(apperr.CodeValidation, fmt.Sprintf("virtual host does not exist for %s; expected %s", domain, vhostConfig))
+	}
+	if err := s.setSiteSuspended(domain, false, serverConfigPath); err != nil {
+		return err
+	}
+	if err := s.reloadOpenLiteSpeed(ctx); err != nil {
+		s.console.Warn("Failed to reload OpenLiteSpeed automatically: " + err.Error())
+	}
+
+	s.console.Success("Site enabled")
+	return nil
+}
+
+func (s SiteService) setSiteSuspended(domain string, suspended bool, serverConfigPath string) error {
+	b, err := os.ReadFile(serverConfigPath)
+	if err != nil {
+		return apperr.Wrap(apperr.CodeConfig, "failed to read OpenLiteSpeed server config", err)
+	}
+
+	cfg, changed := updateSuspendedVhostsDirective(string(b), domain, suspended)
+	if !changed {
+		if suspended {
+			s.console.Bullet("Site already disabled: " + domain)
+		} else {
+			s.console.Bullet("Site already enabled: " + domain)
+		}
+		return nil
+	}
+
+	if err := os.WriteFile(serverConfigPath, []byte(cfg), 0o644); err != nil {
+		return apperr.Wrap(apperr.CodeConfig, "failed to update OpenLiteSpeed server config", err)
+	}
+
+	if suspended {
+		s.console.Bullet("Added to suspendedVhosts: " + domain)
+	} else {
+		s.console.Bullet("Removed from suspendedVhosts: " + domain)
+	}
+	return nil
+}
+
+func updateSuspendedVhostsDirective(cfg, domain string, suspended bool) (string, bool) {
+	lines := strings.Split(cfg, "\n")
+	normalizedDomain := strings.ToLower(strings.TrimSpace(domain))
+	if normalizedDomain == "" {
+		return cfg, false
+	}
+
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		fields := strings.Fields(trimmed)
+		if len(fields) == 0 || fields[0] != "suspendedVhosts" {
+			continue
+		}
+
+		current := parseSuspendedVhosts(fields[1:])
+		updated, changed := toggleSuspendedDomain(current, normalizedDomain, suspended)
+		if !changed {
+			return cfg, false
+		}
+		if len(updated) == 0 {
+			lines = append(lines[:i], lines[i+1:]...)
+			return strings.Join(lines, "\n"), true
+		}
+
+		indent := ""
+		if idx := strings.Index(line, fields[0]); idx > 0 {
+			indent = line[:idx]
+		}
+		lines[i] = formatDirectiveLine(indent, "suspendedVhosts", strings.Join(updated, ","))
+		return strings.Join(lines, "\n"), true
+	}
+
+	if !suspended {
+		return cfg, false
+	}
+
+	updated := append([]string{}, lines...)
+	updated, _ = upsertDirective(updated, "suspendedVhosts", normalizedDomain)
+	return strings.Join(updated, "\n"), true
+}
+
+func parseSuspendedVhosts(tokens []string) []string {
+	parsed := make([]string, 0, len(tokens))
+	for _, token := range tokens {
+		for _, host := range strings.Split(token, ",") {
+			host = strings.ToLower(strings.TrimSpace(host))
+			if host == "" {
+				continue
+			}
+			parsed = append(parsed, host)
+		}
+	}
+	return uniqueNormalizedDomains(parsed)
+}
+
+func toggleSuspendedDomain(domains []string, domain string, suspended bool) ([]string, bool) {
+	normalized := uniqueNormalizedDomains(domains)
+	if suspended {
+		for _, existing := range normalized {
+			if existing == domain {
+				return normalized, false
+			}
+		}
+		normalized = append(normalized, domain)
+		return normalized, true
+	}
+
+	out := make([]string, 0, len(normalized))
+	removed := false
+	for _, existing := range normalized {
+		if existing == domain {
+			removed = true
+			continue
+		}
+		out = append(out, existing)
+	}
+	return out, removed
 }
 
 func (s SiteService) ShowSiteConfig(_ context.Context, opts ShowSiteConfigOptions) error {

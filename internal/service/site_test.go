@@ -885,3 +885,42 @@ func TestCertbotPackagesFor(t *testing.T) {
 		t.Fatalf("expected no package for unknown package manager, got: %v", got)
 	}
 }
+
+func TestUpdateSuspendedVhostsDirectiveAddWhenMissing(t *testing.T) {
+	cfg := "listener Default {\n  address *:80\n}\n"
+
+	updated, changed := updateSuspendedVhostsDirective(cfg, "litespeedtech.club", true)
+	if !changed {
+		t.Fatal("expected config to change when disabling site with missing suspendedVhosts")
+	}
+	if !strings.Contains(updated, "suspendedVhosts") || !strings.Contains(updated, "litespeedtech.club") {
+		t.Fatalf("expected suspendedVhosts to include disabled domain, got: %s", updated)
+	}
+}
+
+func TestUpdateSuspendedVhostsDirectiveRemoveSpecificDomain(t *testing.T) {
+	cfg := "suspendedVhosts         litespeedtech.club,cli2.litespeedtech.club\nlistener Default {\n  address *:80\n}\n"
+
+	updated, changed := updateSuspendedVhostsDirective(cfg, "litespeedtech.club", false)
+	if !changed {
+		t.Fatal("expected config to change when enabling a suspended site")
+	}
+	if strings.Contains(updated, "litespeedtech.club,") || strings.Contains(updated, ",litespeedtech.club") || strings.Contains(updated, " litespeedtech.club\n") {
+		t.Fatalf("expected enabled domain removed from suspendedVhosts, got: %s", updated)
+	}
+	if !strings.Contains(updated, "suspendedVhosts") || !strings.Contains(updated, "cli2.litespeedtech.club") {
+		t.Fatalf("expected other suspended domains preserved, got: %s", updated)
+	}
+}
+
+func TestUpdateSuspendedVhostsDirectiveRemoveDirectiveWhenEmpty(t *testing.T) {
+	cfg := "suspendedVhosts         litespeedtech.club\nlistener Default {\n  address *:80\n}\n"
+
+	updated, changed := updateSuspendedVhostsDirective(cfg, "litespeedtech.club", false)
+	if !changed {
+		t.Fatal("expected config to change when enabling last suspended site")
+	}
+	if strings.Contains(updated, "suspendedVhosts") {
+		t.Fatalf("expected suspendedVhosts directive removed when empty, got: %s", updated)
+	}
+}

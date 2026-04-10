@@ -18,6 +18,14 @@ func (noopSiteManager) UpdateSitePHP(context.Context, service.UpdateSiteOptions)
 	return nil
 }
 
+func (noopSiteManager) EnableSite(context.Context, service.ToggleSiteOptions) error {
+	return nil
+}
+
+func (noopSiteManager) DisableSite(context.Context, service.ToggleSiteOptions) error {
+	return nil
+}
+
 func (noopSiteManager) SiteInfo(context.Context, service.SiteInfoOptions) error {
 	return nil
 }
@@ -165,5 +173,25 @@ func TestSiteUpdateFlagOrder(t *testing.T) {
 		if got[i] != wantPrefix[i] {
 			t.Fatalf("unexpected update flag order at index %d: got %q want %q (full=%#v)", i, got[i], wantPrefix[i], got)
 		}
+	}
+}
+
+func TestSiteCommandIncludesEnableDisable(t *testing.T) {
+	cmd := newSiteCmd(noopSiteManager{}, &rootOptions{})
+
+	enableCmd, _, err := cmd.Find([]string{"enable"})
+	if err != nil {
+		t.Fatalf("expected enable command, got error: %v", err)
+	}
+	if enableCmd == nil || enableCmd.Name() != "enable" {
+		t.Fatalf("expected enable command to be registered, got: %#v", enableCmd)
+	}
+
+	disableCmd, _, err := cmd.Find([]string{"disable"})
+	if err != nil {
+		t.Fatalf("expected disable command, got error: %v", err)
+	}
+	if disableCmd == nil || disableCmd.Name() != "disable" {
+		t.Fatalf("expected disable command to be registered, got: %#v", disableCmd)
 	}
 }

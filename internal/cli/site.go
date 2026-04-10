@@ -12,6 +12,8 @@ import (
 type siteManager interface {
 	CreateSite(ctx context.Context, opts service.CreateSiteOptions) error
 	UpdateSitePHP(ctx context.Context, opts service.UpdateSiteOptions) error
+	EnableSite(ctx context.Context, opts service.ToggleSiteOptions) error
+	DisableSite(ctx context.Context, opts service.ToggleSiteOptions) error
 	SiteInfo(ctx context.Context, opts service.SiteInfoOptions) error
 	ShowSiteConfig(ctx context.Context, opts service.ShowSiteConfigOptions) error
 	ListSites(ctx context.Context, opts service.ListSitesOptions) error
@@ -96,6 +98,8 @@ func newSiteCmd(svc siteManager, rootOpts *rootOptions) *cobra.Command {
 
 	siteCmd.AddCommand(newSiteCreateCmd(svc, rootOpts))
 	siteCmd.AddCommand(newSiteUpdateCmd(svc, rootOpts))
+	siteCmd.AddCommand(newSiteEnableCmd(svc, rootOpts))
+	siteCmd.AddCommand(newSiteDisableCmd(svc, rootOpts))
 	siteCmd.AddCommand(newSiteInfoCmd(svc, rootOpts))
 	siteCmd.AddCommand(newSiteShowCmd(svc, rootOpts))
 	siteCmd.AddCommand(newSiteListCmd(svc, rootOpts))
@@ -239,6 +243,46 @@ func newSiteUpdateCmd(svc siteManager, rootOpts *rootOptions) *cobra.Command {
 	cmd.Flags().BoolVar(&namespace.enable, "enable-ns", false, "enable namespace at virtual host level")
 	cmd.Flags().BoolVar(&namespace.disable, "disable-ns", false, "disable namespace at virtual host level")
 	cmd.Flags().BoolVar(&withHSTS, "hsts", false, "add recommended security extra headers to static context /")
+	return cmd
+}
+
+func newSiteEnableCmd(svc siteManager, rootOpts *rootOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:     "enable <domain>",
+		Short:   "Enable site in OpenLiteSpeed server config",
+		Example: "ols site enable example.com",
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			err := svc.EnableSite(cmd.Context(), service.ToggleSiteOptions{
+				Domain: args[0],
+				DryRun: rootOpts.DryRun,
+			})
+			if err != nil {
+				return fmt.Errorf("site enable failed: %w", err)
+			}
+			return nil
+		},
+	}
+	return cmd
+}
+
+func newSiteDisableCmd(svc siteManager, rootOpts *rootOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:     "disable <domain>",
+		Short:   "Disable site in OpenLiteSpeed server config",
+		Example: "ols site disable example.com",
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			err := svc.DisableSite(cmd.Context(), service.ToggleSiteOptions{
+				Domain: args[0],
+				DryRun: rootOpts.DryRun,
+			})
+			if err != nil {
+				return fmt.Errorf("site disable failed: %w", err)
+			}
+			return nil
+		},
+	}
 	return cmd
 }
 

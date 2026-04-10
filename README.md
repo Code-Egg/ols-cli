@@ -111,7 +111,7 @@ ols (command) [options]
 | Command | Purpose | Options |
 | --- | --- | --- |
 | `install` | Install/align OpenLiteSpeed runtime and related packages | `--php81` `--php82` `--php83` `--php84` `--php85` `--database` `--config` `--http-port` `--https-port` `--ssl-cert` `--ssl-key` `--no-listeners` |
-| `site` | Manage sites (`create`, `update`, `info`, `show`, `list`, `delete`) | `--wp` `--le` `--php81` `--php82` `--php83` `--php84` `--php85` `--enable-owasp` `--disable-owasp` `--enable-recaptcha` `--disable-recaptcha` `--enable-ns` `--disable-ns` `--hsts` `--keep-db` |
+| `site` | Manage sites (`create`, `update`, `enable`, `disable`, `info`, `show`, `list`, `delete`) | `--wp` `--le` `--php81` `--php82` `--php83` `--php84` `--php85` `--enable-owasp` `--disable-owasp` `--enable-recaptcha` `--disable-recaptcha` `--enable-ns` `--disable-ns` `--hsts` `--keep-db` |
 | `update` | Update installed `ols` binary to latest GitHub release for current platform |  |
 
 Global options (apply to all commands): `--dry-run`, `--color`
@@ -126,6 +126,8 @@ ols site (command) [options]
 | --- | --- | --- |
 | `create` | Create a new site/vhost | `--wp` `--le` `--php81` `--php82` `--php83` `--php84` `--php85` `--enable-owasp` `--disable-owasp` `--enable-recaptcha` `--disable-recaptcha` `--enable-ns` `--disable-ns` `--hsts` |
 | `update` | Update an existing site (PHP target optional when only security/LE flags are used) | `--wp` (requires one of `--php81` `--php82` `--php83` `--php84` `--php85`), optional `--le`, or security flags only: `--enable-owasp` `--disable-owasp` `--enable-recaptcha` `--disable-recaptcha` `--enable-ns` `--disable-ns` `--hsts` |
+| `enable` | Enable site by removing domain from server-level `suspendedVhosts` |  |
+| `disable` | Disable site by adding domain to server-level `suspendedVhosts` |  |
 | `info` | Show site metadata and detected status |  |
 | `show` | Print OLS virtual host config (`vhconf.conf`) |  |
 | `list` | List managed sites discovered from OLS vhost directory |  |
