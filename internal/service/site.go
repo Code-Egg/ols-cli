@@ -521,9 +521,6 @@ func (s SiteService) UpdateSitePHP(ctx context.Context, opts UpdateSiteOptions) 
 	if !phpRequested && !opts.WithWordPress && !securityRequested && !leRequested {
 		return apperr.New(apperr.CodeValidation, "no update action requested")
 	}
-	if opts.WithWordPress && !phpRequested {
-		return apperr.New(apperr.CodeValidation, "missing PHP version for --wp update flow")
-	}
 
 	var (
 		phpVersion string
@@ -639,6 +636,14 @@ func (s SiteService) UpdateSitePHP(ctx context.Context, opts UpdateSiteOptions) 
 	}
 
 	if opts.WithWordPress {
+		if !phpRequested {
+			detectedPHPVersion, err := detectVHostPHPVersion(vhostConfig)
+			if err != nil {
+				return err
+			}
+			phpVersion = detectedPHPVersion
+			s.console.Bullet("Detected PHP handler for WordPress reconcile: lsphp" + phpVersion)
+		}
 		if err := ensureWordPressFiles(docRoot); err != nil {
 			return err
 		}
@@ -1643,6 +1648,22 @@ func removeDomainMappings(cfg string, domains ...string) (string, bool) {
 		return cfg, false
 	}
 	return strings.Join(lines, "\n"), true
+}
+
+func detectVHostPHPVersion(vhostConfigPath string) (string, error) {
+	b, err := os.ReadFile(vhostConfigPath)
+	if err != nil {
+		return "", apperr.Wrap(apperr.CodeConfig, "failed to read vhost config", err)
+	}
+
+	token := lsphpNamePattern.FindString(string(b))
+	if token == "" {
+		return "", apperr.New(
+			apperr.CodeValidation,
+			fmt.Sprintf("could not detect current PHP handler in %s; provide one of --php81/--php82/--php83/--php84/--php85", vhostConfigPath),
+		)
+	}
+	return strings.TrimPrefix(token, "lsphp"), nil
 }
 
 func switchVHostPHPHandler(vhostConfigPath, phpVersion string) error {

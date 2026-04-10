@@ -320,6 +320,69 @@ func TestUpdateSitePHPSwitchesHandler(t *testing.T) {
 	}
 }
 
+func TestUpdateSiteWordPressOnlyUsesExistingPHPHandler(t *testing.T) {
+	var out bytes.Buffer
+	console := ui.NewStyledConsole(&out)
+	r := &fakeRunner{}
+
+	base := t.TempDir()
+	lswsRoot := filepath.Join(base, "lsws")
+	webRoot := filepath.Join(base, "www")
+	domain := "example.com"
+	vhostDir := filepath.Join(lswsRoot, "conf", "vhosts", domain)
+	docRoot := filepath.Join(webRoot, domain, "html")
+
+	if err := os.MkdirAll(vhostDir, 0o755); err != nil {
+		t.Fatalf("mkdir vhost: %v", err)
+	}
+	if err := os.MkdirAll(docRoot, 0o755); err != nil {
+		t.Fatalf("mkdir docRoot: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(vhostDir, "vhconf.conf"), []byte(buildVHConfig("85")), 0o644); err != nil {
+		t.Fatalf("write vhconf: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(docRoot, "wp-config.php"), []byte("<?php\n"), 0o644); err != nil {
+		t.Fatalf("write wp-config.php: %v", err)
+	}
+
+	if err := os.MkdirAll(filepath.Join(lswsRoot, "lsphp85", "bin"), 0o755); err != nil {
+		t.Fatalf("mkdir php bin: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(lswsRoot, "lsphp85", "bin", "php"), []byte("stub"), 0o755); err != nil {
+		t.Fatalf("write php cli stub: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(docRoot, ".ols-wp-cli.phar"), []byte("stub"), 0o755); err != nil {
+		t.Fatalf("write wp-cli phar stub: %v", err)
+	}
+
+	svc := NewSiteServiceWithPaths(
+		fakeDetector{info: platform.Info{ID: "ubuntu", Family: platform.FamilyDebian, PackageManager: platform.PackageManagerAPT, VersionID: "24.04"}},
+		r,
+		console,
+		lswsRoot,
+		webRoot,
+	)
+
+	err := svc.UpdateSitePHP(context.Background(), UpdateSiteOptions{Domain: domain, WithWordPress: true})
+	if err != nil {
+		t.Fatalf("unexpected update error: %v", err)
+	}
+
+	foundPHPCLI := false
+	for _, call := range r.calls {
+		if len(call) == 0 {
+			continue
+		}
+		if strings.Contains(call[0], "lsphp85") {
+			foundPHPCLI = true
+			break
+		}
+	}
+	if !foundPHPCLI {
+		t.Fatalf("expected wp-cli operations to use detected lsphp85, got calls: %#v", r.calls)
+	}
+}
+
 func TestUpdateSiteSecurityOnlyWithoutPHP(t *testing.T) {
 	var out bytes.Buffer
 	console := ui.NewStyledConsole(&out)

@@ -208,9 +208,6 @@ func newSiteUpdateCmd(svc siteManager, rootOpts *rootOptions) *cobra.Command {
 				return err
 			}
 
-			if withWordPress && phpVersion == "" {
-				return apperr.New(apperr.CodeValidation, "missing PHP version flag for --wp; provide one of --php81/--php82/--php83/--php84/--php85")
-			}
 			if phpVersion == "" && !withWordPress && !withLE && owaspEnabled == nil && recaptchaEnabled == nil && namespaceEnabled == nil && !withHSTS {
 				return apperr.New(apperr.CodeValidation, "no update action provided; pass PHP version and/or flags such as --wp, --le, --enable-owasp, --enable-recaptcha, --disable-owasp, --disable-recaptcha, --enable-ns, --disable-ns, --hsts")
 			}

@@ -125,7 +125,7 @@ ols site (command) [options]
 | Subcommand | Purpose | Options |
 | --- | --- | --- |
 | `create` | Create a new site/vhost | `--wp` `--le` `--php81` `--php82` `--php83` `--php84` `--php85` `--enable-owasp` `--disable-owasp` `--enable-recaptcha` `--disable-recaptcha` `--enable-ns` `--disable-ns` `--hsts` |
-| `update` | Update an existing site (PHP target optional when only security/LE flags are used) | `--wp` (requires one of `--php81` `--php82` `--php83` `--php84` `--php85`), optional `--le`, or security flags only: `--enable-owasp` `--disable-owasp` `--enable-recaptcha` `--disable-recaptcha` `--enable-ns` `--disable-ns` `--hsts` |
+| `update` | Update an existing site (PHP target optional when only WordPress/security/LE flags are used) | optional `--wp`, optional `--le`, optional PHP target: `--php81` `--php82` `--php83` `--php84` `--php85`, or security flags: `--enable-owasp` `--disable-owasp` `--enable-recaptcha` `--disable-recaptcha` `--enable-ns` `--disable-ns` `--hsts` |
 | `enable` | Enable site by removing domain from server-level `suspendedVhosts` |  |
 | `disable` | Disable site by adding domain to server-level `suspendedVhosts` |  |
 | `info` | Show site metadata and detected status |  |
